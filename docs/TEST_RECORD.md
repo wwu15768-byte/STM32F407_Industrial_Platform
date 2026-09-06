@@ -36,5 +36,14 @@
   - `build/probe.txt` 命中 `/build/`。
   - `cmake-build-debug/probe.txt` 命中 `/cmake-build-*/`。
   - `firmware.elf` 命中 `*.elf`。
-  - `Core/Src/main.c`、`Project.ioc` 和 `CMakeLists.txt` 未命中忽略规则。
+- `Core/Src/main.c`、`Project.ioc` 和 `CMakeLists.txt` 未命中忽略规则。
 - 结论：通过。
+
+## TEST-20260906-04：GitHub 远程同步
+
+- 目标：证明第一次稳定提交已存在于 GitHub 远程 `main`。
+- 方法：比较本地 `HEAD`、本地远程跟踪引用 `origin/main`，并使用 `git ls-remote --heads origin main` 直接查询 GitHub。
+- 预期：三者指向同一完整提交哈希。
+- 实际结果：三者均指向 `8bc8d98f36bf73577daaf4e3d70656f15b18b5db`。
+- 结论：通过。
+- 边界：Git 引用查询不能证明仓库可见性；Private 属性由 GitHub 仓库设置确认。
