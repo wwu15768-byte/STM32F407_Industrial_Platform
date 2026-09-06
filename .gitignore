@@ -1,0 +1,45 @@
+# Build directories
+/build/
+/build-*/
+/cmake-build-*/
+/out/
+
+# Accidental in-source CMake/Ninja output
+/CMakeFiles/
+/CMakeCache.txt
+/cmake_install.cmake
+/CTestTestfile.cmake
+/Makefile
+/build.ninja
+/.ninja_deps
+/.ninja_log
+/compile_commands.json
+/install_manifest.txt
+/CMakeUserPresets.json
+
+# GNU Arm Embedded build artifacts
+*.o
+*.obj
+*.d
+*.su
+*.lst
+*.elf
+*.axf
+*.map
+*.hex
+*.bin
+*.srec
+
+# Editor, operating-system, and temporary files
+/.vscode/
+/.idea/
+*.user
+*.tmp
+*.bak
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Keep reproducible project inputs under version control, including:
+# *.ioc, CMakeLists.txt, cmake/, Core/, Drivers/, and startup/linker files.
