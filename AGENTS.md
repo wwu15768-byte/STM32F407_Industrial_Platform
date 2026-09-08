@@ -448,6 +448,8 @@ RS485物理通信未验证：
 
 先读取：
 
+docs/SESSION_HANDOFF.md
+
 docs/ROADMAP.md
 
 docs/PROJECT_STATUS.md

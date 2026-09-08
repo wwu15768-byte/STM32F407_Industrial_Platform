@@ -11,7 +11,7 @@ M1：STM32 裸机稳定基线，已开始。
 
 ## Current Goal
 
-基于已确认硬件信息，使用 STM32CubeMX 建立 STM32F407VGT6 最小 HAL 工程。
+下一会话从 STM32CubeMX 器件选择开始，建立 STM32F407VGT6 最小 HAL 工程。
 
 ## Completed
 
@@ -33,10 +33,11 @@ M1：STM32 裸机稳定基线，已开始。
 - 确认 USART2 使用 PD5/PD6，外接 USB-TTL 使用 3.3 V 电平。
 - 确认 ST-LINK V2 使用 SWD 并连接 NRST。
 - 确认外部 12 V 经降压后以稳定 5 V 为开发板供电，各设备共地且不并联其他供电源。
+- 创建 `feature/m1-bare-metal-baseline` 分支，并提交 M1 硬件基线文档 `65cd01c`。
 
 ## In Progress
 
-准备创建 STM32CubeMX 最小工程；尚未生成固件代码。
+会话暂停在 STM32CubeMX 器件选择之前；尚未创建 CubeMX 工程。
 
 ## Blocked
 
@@ -44,16 +45,16 @@ M1：STM32 裸机稳定基线，已开始。
 
 ## Known Bugs
 
-无已确认项目 Bug。
+无已确认固件 Bug。已纠正并归档早期目标 MCU 型号不一致问题。
 
 ## Current Branch
 
-`main`，跟踪 `origin/main`。
+`feature/m1-bare-metal-baseline`，当前无远程跟踪分支；`main` 与 `origin/main` 均停留在 `4e92819`。
 
 ## Last Verified Function
 
-尚无固件功能可验证；最近完成的是 M1 硬件配置输入核对。
+尚无固件功能可验证。固件未编写、未编译、未下载、未运行；最近一次有效验证是 M1 硬件配置输入核对 `TEST-20260908-01`。
 
 ## Next Step
 
-在 STM32CubeMX 中选择 STM32F407VGT6，创建最小 HAL 工程并逐项审查基础配置。
+进入 STM32CubeMX 器件选择。
