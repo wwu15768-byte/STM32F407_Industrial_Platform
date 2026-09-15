@@ -3,7 +3,7 @@
 > 唯一回答：项目现在在哪？
 > 更新时机：项目状态发生明显变化时。
 
-更新时间：2026-09-08
+更新时间：2026-09-15
 
 ## Current Milestone
 
@@ -11,7 +11,7 @@ M1：STM32 裸机稳定基线，已开始。
 
 ## Current Goal
 
-下一会话从 STM32CubeMX 器件选择开始，建立 STM32F407VGT6 最小 HAL 工程。
+完成 M1 板上运行验证：通过 ST-LINK 下载当前裸机基线，验证 PB2 LED、USART2 调试输出和复位运行，建立 Known Good Baseline。
 
 ## Completed
 
@@ -34,10 +34,17 @@ M1：STM32 裸机稳定基线，已开始。
 - 确认 ST-LINK V2 使用 SWD 并连接 NRST。
 - 确认外部 12 V 经降压后以稳定 5 V 为开发板供电，各设备共地且不并联其他供电源。
 - 创建 `feature/m1-bare-metal-baseline` 分支，并提交 M1 硬件基线文档 `65cd01c`。
+- 在 STM32CubeMX 中选择 STM32F407VGT6、LQFP-100，生成最小 HAL + CMake 裸机工程。
+- 完成 M1 配置层核对：HSE 为 8 MHz，PLL 系统时钟为 168 MHz，APB1 为 42 MHz，APB2 为 84 MHz。
+- 已生成 PB2 USER_LED GPIO 输出配置，以及 USART2 PD5/TX、PD6/RX、115200、8N1 配置。
+- 使用 CMake + Ninja + GNU Arm GCC 成功完成首次固件编译、汇编、链接和产物生成。
+- 已生成 .elf、.hex、.bin 构建产物；build/ 已由 .gitignore 正确排除，不纳入版本控制。
+- CubeMX 裸机工程已形成独立 Git checkpoint：feat: add STM32F407VGT6 CubeMX bare-metal project。
+- feature/m1-bare-metal-baseline 已推送到远程并建立对应 upstream。
 
 ## In Progress
 
-会话暂停在 STM32CubeMX 器件选择之前；尚未创建 CubeMX 工程。
+M1 板上运行验证。当前工程已经能够通过 GCC + CMake + Ninja 构建，但尚未通过实物运行证明 LED、USART2 和下载复位链路正常
 
 ## Blocked
 
@@ -49,12 +56,12 @@ M1：STM32 裸机稳定基线，已开始。
 
 ## Current Branch
 
-`feature/m1-bare-metal-baseline`，当前无远程跟踪分支；`main` 与 `origin/main` 均停留在 `4e92819`。
+feature/m1-bare-metal-baseline，已关联远程 origin/feature/m1-bare-metal-baseline；main 与 origin/main 仍停留在 4e92819。
 
 ## Last Verified Function
 
-尚无固件功能可验证。固件未编写、未编译、未下载、未运行；最近一次有效验证是 M1 硬件配置输入核对 `TEST-20260908-01`。
+尚无板上固件功能通过验证。最近一次有效验证为 M1 构建基线：CubeMX 生成工程能够通过 CMake + Ninja + GNU Arm GCC 完成编译、汇编、链接并生成 .elf、.hex、.bin。该结果只证明工程可构建，不证明固件已经在 STM32F407VGT6 实物上正确运行。
 
 ## Next Step
 
-进入 STM32CubeMX 器件选择。
+使用 ST-LINK 对当前裸机基线进行板上验证。顺序为：目标识别与下载 → 最小 LED 心跳 → USART2 调试输出 → 多次复位运行检查。全部通过后再判定 M1 完成。

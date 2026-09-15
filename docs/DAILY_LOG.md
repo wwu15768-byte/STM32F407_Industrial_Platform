@@ -118,3 +118,68 @@
 ## 明天下一步
 
 进入 M1，先确认硬件型号、时钟源、LED、UART 和 ST-LINK 连接信息。
+
+# 2026-09-15
+
+## 今日计划
+
+- 修复 M1 开发进度与 Git 历史不同步的问题。
+- 将已经
+- 将已经完成的 CMake + Ninja + GCC 构建结果同步到项目状态和测试记录。
+- 将当前功能分支推送到远程，恢复本地与远程备份节奏。
+
+## 实际完成
+
+- 检查 git status、当前 branch、最近提交、远程仓库和 upstream 状态。
+- 确认当前位于 `feature/m1-bare-metal-baseline`。
+- 使用 `git status --ignored --short` 和 `git check-ignore` 思路确认 build/ 已正确被忽略。
+- 检查 .mxproject，确认其中主要记录 CubeMX 相对工程路径，没有发现需要排除的机器私有绝对路径。
+- 将 .ioc、CMake 配置、HAL/CMSIS、启动文件、链接脚本和生成源码作为同一个 CubeMX 工程 checkpoint 纳入 Git。
+- 在提交前通过 `git status` 和 `git diff --cached --stat` 检查暂存快照，未将 build/、.elf、.hex 或 .bin 纳入提交。
+- 创建提交 `feat: add STM32F407VGT6 CubeMX bare-metal project`。
+- 将 `feature/m1-bare-metal-baseline` 推送到远程并建立 upstream。
+- 复核并记录现有 CMake + Ninja + GNU Arm GCC 构建成功结果。
+- 同步更新 M1 项目状态、会话交接、测试记录和知识缺口。
+
+## 验收情况
+
+CubeMX 工程 Git checkpoint：完成。
+构建产物忽略规则：确认有效。
+M1 构建基线：已通过 CMake + Ninja + GCC 验证。
+远程功能分支：已建立并同步。
+板上运行：尚未验证，因此 M1 尚未完成。
+
+## 未完成
+
+- ST-LINK 实际下载验证。
+- PB2 LED 心跳验证。
+- USART2 实际串口输出验证。
+- 多次复位后的稳定启动验证。
+- M1 最终验收与后续合并。
+
+## 今日 Bug
+
+- 无已确认固件 Bug。发现开发进度已经明显领先于 Git checkpoint 和项目状态文档，属于工程流程同步问题；本次通过补充有意义的 commit、远程 push 和状态文档同步进行修正，不单独建立 ERROR_LOG。
+
+## 今日学习
+
+- Git commit 用于保存有意义的本地工程状态，push 用于将已有 commit 同步到远程，两者作用不同。
+- 第三方 HAL/CMSIS 源码可以作为工程输入进入仓库，但 build/、.elf、.hex、.bin 等可重新生成的构建产物不应进入版本控制。
+- 一个 CubeMX 工程首次进入 Git 时文件数量较多属于正常现象，重点应检查提交边界而不是文件数量。
+- “代码已生成”、“工程可编译”、“固件可运行”、“功能已验证”是四个不同状态，不能混为一谈。
+- Git checkpoint 应在形成有意义的工程状态时主动建立，而不能等到大量修改累积后再一次性补交。
+
+## 尚未理解
+
+- 尚未通过实际 ST-LINK 下载和目标板运行观察构建出的固件。
+- 尚未验证当前时钟配置、PB2 GPIO 和 USART2 配置在真实硬件上的行为。
+
+## Git
+
+- Branch：feature/m1-bare-metal-baseline
+- Commit：`4fba6ba`，`feat: add STM32F407VGT6 CubeMX bare-metal project`
+- Remote：origin/feature/m1-bare-metal-baseline
+
+## 明天下一步
+
+- 保持 M1，不引入 FreeRTOS。先通过 ST-LINK 完成固件下载和最小 LED 心跳验证，然后再验证 USART2 调试输出。

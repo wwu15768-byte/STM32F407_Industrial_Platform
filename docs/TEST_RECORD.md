@@ -61,3 +61,34 @@
   - 板端使用降压后的稳定 5 V 输入，不直接接入 12 V。
 - 结论：通过，可作为 CubeMX 配置输入。
 - 边界：本次只完成文档与连接信息核对，尚未证明时钟、GPIO、UART、下载或复位在实物上工作。
+
+## TEST-20260915-01：CubeMX 最小裸机工程配置核对
+
+- 目标：确认实际生成的 CubeMX 工程仍然符合已经确认的 M1 硬件基线。
+- 方法：检查 .ioc、生成的 GPIO、USART 和时钟相关配置。
+- 实际结果：
+  - 目标器件为 STM32F407VGT6，LQFP-100。
+  - HSE 配置值为 8 MHz。
+  - PLL 使用 HSE 作为输入，SYSCLK/HCLK 为 168 MHz。
+  - APB1 为 42 MHz，APB2 为 84 MHz。
+  - PB2 配置为 GPIO 输出，标签为 USER_LED。
+  - PD5/PD6 分别配置为 USART2_TX/USART2_RX。
+  - USART2 配置为 115200、8 数据位、1 停止位、无校验、收发模式。
+- 结论：通过，当前生成工程与 M1 已确认硬件输入一致。
+- 边界：本测试只验证生成配置和源码内容，不证明这些配置已经在实物硬件上正确工作。
+
+## TEST-20260915-02：M1 CMake + Ninja + GCC 构建基线
+- 目标：证明 CubeMX 生成的 STM32F407VGT6 裸机工程可以通过项目规定的命令行工具链完整构建。
+- 环境：Windows PowerShell，STM32CubeCLT 1.22.0，GNU Arm Toolchain，CMake，Ninja。
+- 方法：使用 CMake Debug preset 配置工程，并通过 Ninja 详细构建输出检查 C 源码、启动汇编、链接和固件产物生成过程。
+- 实际结果：
+  - CMake 能够正确使用项目 CMake 配置。
+  - inja 能够启动并执行完整构建任务。
+  - arm-none-eabi-gcc 能够完成 STM32F407xx HAL 工程源码编译。
+  - 工程能够成功完成链接。
+  - 成功生成 STM32F407_Industrial_Platform.elf。
+  - 成功生成对应 .hex 和 .bin 固件产物。
+  - build/ 被 Git 忽略，不进入源码版本历史。
+- 结论：通过。当前工程已经达到“可构建”状态。
+- 边界：本测试只能证明源代码和构建系统能够产生固件映像，不证明固件已成功下载，也不证明系统时钟、LED、USART2 或其他外设已经在目标板上正常工作。
+
