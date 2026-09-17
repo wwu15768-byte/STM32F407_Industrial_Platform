@@ -37,10 +37,10 @@ M1：STM32 裸机稳定基线，已开始。
 - 在 STM32CubeMX 中选择 STM32F407VGT6、LQFP-100，生成最小 HAL + CMake 裸机工程。
 - 完成 M1 配置层核对：HSE 为 8 MHz，PLL 系统时钟为 168 MHz，APB1 为 42 MHz，APB2 为 84 MHz。
 - 已生成 PB2 USER_LED GPIO 输出配置，以及 USART2 PD5/TX、PD6/RX、115200、8N1 配置。
-- 使用 CMake + Ninja + GNU Arm GCC 成功完成首次固件编译、汇编、链接和产物生成。
+- 使用 `CMake + Ninja + GNU Arm GCC` 成功完成首次固件编译、汇编、链接和产物生成。
 - 已生成 .elf、.hex、.bin 构建产物；build/ 已由 .gitignore 正确排除，不纳入版本控制。
-- CubeMX 裸机工程已形成独立 Git checkpoint：feat: add STM32F407VGT6 CubeMX bare-metal project。
-- feature/m1-bare-metal-baseline 已推送到远程并建立对应 upstream。
+- CubeMX 裸机工程已形成独立 Git checkpoint：`feat: add STM32F407VGT6 CubeMX bare-metal project`。
+- `feature/m1-bare-metal-baseline` 已推送到远程并建立对应 upstream。
 
 ## In Progress
 
@@ -56,7 +56,7 @@ M1 板上运行验证。当前工程已经能够通过 GCC + CMake + Ninja 构�
 
 ## Current Branch
 
-feature/m1-bare-metal-baseline，已关联远程 origin/feature/m1-bare-metal-baseline；main 与 origin/main 仍停留在 4e92819。
+`feature/m1-bare-metal-baseline`，已关联远程 `origin/feature/m1-bare-metal-baseline`；`main` 与 `origin/main` 仍停留在 4e92819。
 
 ## Last Verified Function
 

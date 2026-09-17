@@ -124,30 +124,29 @@
 ## 今日计划
 
 - 修复 M1 开发进度与 Git 历史不同步的问题。
-- 将已经
-- 将已经完成的 CMake + Ninja + GCC 构建结果同步到项目状态和测试记录。
+- 将已经完成的 `CMake + Ninja + GCC` 构建结果同步到项目状态和测试记录。
 - 将当前功能分支推送到远程，恢复本地与远程备份节奏。
 
 ## 实际完成
 
 - 检查 git status、当前 branch、最近提交、远程仓库和 upstream 状态。
 - 确认当前位于 `feature/m1-bare-metal-baseline`。
-- 使用 `git status --ignored --short` 和 `git check-ignore` 思路确认 build/ 已正确被忽略。
-- 检查 .mxproject，确认其中主要记录 CubeMX 相对工程路径，没有发现需要排除的机器私有绝对路径。
+- 使用 `git status --ignored --short` 和 `git check-ignore` 思路确认 `build/` 已正确被忽略。
+- 检查 `.mxproject`，确认其中主要记录 CubeMX 相对工程路径，没有发现需要排除的机器私有绝对路径。
 - 将 .ioc、CMake 配置、HAL/CMSIS、启动文件、链接脚本和生成源码作为同一个 CubeMX 工程 checkpoint 纳入 Git。
 - 在提交前通过 `git status` 和 `git diff --cached --stat` 检查暂存快照，未将 build/、.elf、.hex 或 .bin 纳入提交。
 - 创建提交 `feat: add STM32F407VGT6 CubeMX bare-metal project`。
 - 将 `feature/m1-bare-metal-baseline` 推送到远程并建立 upstream。
-- 复核并记录现有 CMake + Ninja + GNU Arm GCC 构建成功结果。
+- 复核并记录现有 `CMake + Ninja + GNU Arm GCC` 构建成功结果。
 - 同步更新 M1 项目状态、会话交接、测试记录和知识缺口。
 
 ## 验收情况
 
-CubeMX 工程 Git checkpoint：完成。
-构建产物忽略规则：确认有效。
-M1 构建基线：已通过 CMake + Ninja + GCC 验证。
-远程功能分支：已建立并同步。
-板上运行：尚未验证，因此 M1 尚未完成。
+- CubeMX 工程 Git checkpoint：完成。
+- 构建产物忽略规则：确认有效。
+- M1 构建基线：已通过 `CMake + Ninja + GCC` 验证。
+- 远程功能分支：已建立并同步。
+- 板上运行：尚未验证，因此 M1 尚未完成。
 
 ## 未完成
 

@@ -83,7 +83,7 @@
 - 方法：使用 CMake Debug preset 配置工程，并通过 Ninja 详细构建输出检查 C 源码、启动汇编、链接和固件产物生成过程。
 - 实际结果：
   - CMake 能够正确使用项目 CMake 配置。
-  - inja 能够启动并执行完整构建任务。
+  - Ninja 能够启动并执行完整构建任务。
   - arm-none-eabi-gcc 能够完成 STM32F407xx HAL 工程源码编译。
   - 工程能够成功完成链接。
   - 成功生成 STM32F407_Industrial_Platform.elf。
