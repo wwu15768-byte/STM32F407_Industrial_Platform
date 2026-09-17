@@ -182,3 +182,79 @@
 ## 明天下一步
 
 - 保持 M1，不引入 FreeRTOS。先通过 ST-LINK 完成固件下载和最小 LED 心跳验证，然后再验证 USART2 调试输出。
+
+# 2026-09-17
+
+## 今日计划
+
+- 清理 M1 开发前遗留的文档修改并恢复干净工作区。
+- 完成 STM32F407VGT6 裸机基线的第一次真实板级运行验证。
+- 验证 ST-LINK 下载、PB2 LED heartbeat、USART2 TX、NRST 和断电重启行为。
+- 在验证通过后建立 M1 Known Good Baseline。
+
+## 实际完成
+
+- 检查当前分支、HEAD、远程跟踪分支和暂存区状态。
+- 清理 `DAILY_LOG.md`、`PROJECT_STATUS.md` 和 `TEST_RECORD.md` 中的文档修改，并创建提交 `bacda60`：`docs: clean up M1 records`。
+- 在 PB2 上加入最小 LED heartbeat 测试逻辑，使用设定的 500 ms HAL 延时周期翻转 USER_LED。
+- 使用 CMake + Ninja + GNU Arm GCC 成功重新构建固件。
+- 使用 ST-LINK 成功将固件下载到 STM32F407VGT6。
+- 实物确认 PB2 USER_LED 能够稳定周期翻转。
+- 连续执行 3 次 NRST，LED heartbeat 均能够正常恢复运行。
+- 核对 USART2 配置为 PD5/TX、PD6/RX、115200、8N1、无硬件流控。
+- 使用 `HAL_UART_Transmit()` 完成最小 USART2 TX 启动信息发送测试。
+- PC 通过 3.3 V USB-TTL 实际接收到 `USART2 TX OK`。
+- 连续执行 3 次 NRST，每次均能重新收到启动信息，同时 LED heartbeat 保持正常。
+- 连续完成 3 次完全断电重新上电测试，每次 LED heartbeat 和 USART2 TX 均恢复正常。
+- 完成 M1 主要板级功能验收，开始整理测试记录和最终 Git checkpoint。
+
+## 验收情况
+
+- CMake + Ninja + GCC 构建：通过。
+- ST-LINK 固件下载：通过。
+- STM32F407VGT6 启动运行：通过。
+- PB2 USER_LED heartbeat：通过。
+- USART2 TX：通过。
+- NRST ×3：通过。
+- 完全断电重新上电 ×3：通过。
+- USART2 RX：本次未测试，不属于当前 M1 最小验收范围。
+- M1 板级功能验收：通过，等待最终文档同步、Git checkpoint 和远程 push 后关闭 M1。
+
+## 未完成
+
+- 完成 M1 最终状态文档同步。
+- 建立并检查 M1 稳定 Git checkpoint。
+- 将最终 M1 checkpoint 推送到远程。
+- USART2 RX 留待后续正式通信阶段验证。
+
+## 今日 Bug
+
+- 无需要归档的固件 Bug。
+- UART 测试代码初次编译时出现一次缺少分号的 C 语法错误；根据 GCC 报错定位到上一行并立即修正，未形成持续性故障，因此不单独建立 ERROR_LOG。
+- 执行 CMake 命令时曾将 `--verbose` 误输入为 `--verpose`，属于一次性命令输入错误。
+
+## 今日学习
+
+- “配置存在”、“代码可编译”、“固件可下载”和“功能经过真实硬件验证”属于不同工程状态。
+- GCC 报告 `expected ',' or ';' before ...` 时，实际语法错误可能位于报错位置之前，应优先检查前一条语句是否正确结束。
+- USART2 初始化成功不等于 UART 通信已经通过验证，必须使用真实接收端观察数据。
+- 当前测试只证明 USART2 TX 链路，不能据此认为 RX 也已通过。
+- NRST 验证和完全断电重新上电验证覆盖的启动场景不同。
+- 一个 Known Good Baseline 必须同时具有可构建、可下载、可运行、可观测和可重复验证的证据。
+
+## 尚未理解
+
+- USART2 RX 尚未进行实际板级验证。
+- 尚未验证当前系统长期运行稳定性和精确时序。
+- 尚未开始 FreeRTOS 调度行为的实际验证。
+
+## Git
+
+- Branch：`feature/m1-bare-metal-baseline`
+- 开发起点 Commit：`bacda60`，`docs: clean up M1 records`
+- M1 最终功能 checkpoint：待创建
+- Remote：最终 checkpoint 创建后待 push
+
+## 明天下一步
+
+完成 M1 Git checkpoint 和远程同步后，冻结裸机 Known Good Baseline。下一项目阶段进入 M2，但首先只建立最小 FreeRTOS 启动与任务调度基线，不直接进入 ADC、DMA 或正式通信功能。

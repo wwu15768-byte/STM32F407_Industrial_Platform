@@ -41,5 +41,8 @@
 Thumbs.db
 Desktop.ini
 
+# Local IDE state
+.settings/
+
 # Keep reproducible project inputs under version control, including:
 # *.ioc, CMakeLists.txt, cmake/, Core/, Drivers/, and startup/linker files.

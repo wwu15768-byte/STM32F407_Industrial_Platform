@@ -3,15 +3,15 @@
 > 唯一回答：项目现在在哪？
 > 更新时机：项目状态发生明显变化时。
 
-更新时间：2026-09-15
+更新时间：2026-09-17
 
 ## Current Milestone
 
-M1：STM32 裸机稳定基线，已开始。
+M1：STM32 裸机稳定基线，板级功能验收已通过，正在完成最终 Git checkpoint 与远程同步。
 
 ## Current Goal
 
-完成 M1 板上运行验证：通过 ST-LINK 下载当前裸机基线，验证 PB2 LED、USART2 调试输出和复位运行，建立 Known Good Baseline。
+固化已经通过真实 STM32F407VGT6 板级验证的 M1 Known Good Baseline：同步测试记录与项目状态，完成最终 Git checkpoint 并推送远程。完成后关闭 M1，再进入 M2 FreeRTOS 最小系统。
 
 ## Completed
 
@@ -41,10 +41,18 @@ M1：STM32 裸机稳定基线，已开始。
 - 已生成 .elf、.hex、.bin 构建产物；build/ 已由 .gitignore 正确排除，不纳入版本控制。
 - CubeMX 裸机工程已形成独立 Git checkpoint：`feat: add STM32F407VGT6 CubeMX bare-metal project`。
 - `feature/m1-bare-metal-baseline` 已推送到远程并建立对应 upstream。
+- 使用 ST-LINK 成功将当前裸机固件下载到 STM32F407VGT6，并完成真实目标板运行验证。
+- PB2 USER_LED 已完成最小 heartbeat 验证，按照程序设定的 500 ms HAL 延时周期稳定翻转。
+- PB2 heartbeat 在连续 3 次 NRST 后均能够正常恢复运行。
+- USART2 已通过 PD5/TX、115200、8N1、无流控配置完成真实 TX 验证。
+- PC 通过 3.3 V USB-TTL 实际接收到 `USART2 TX OK` 启动信息。
+- USART2 TX 在连续 3 次 NRST 后均能够重新输出，且 PB2 heartbeat 同时保持正常。
+- 完成连续 3 次完全断电重新上电验证，每次 PB2 heartbeat 和 USART2 TX 均能够恢复正常。
+- 当前 M1 已达到可构建、可下载、可运行、可观测和可重复启动的板级功能状态。
 
 ## In Progress
 
-M1 板上运行验证。当前工程已经能够通过 GCC + CMake + Ninja 构建，但尚未通过实物运行证明 LED、USART2 和下载复位链路正常
+M1 收尾。板级功能验收已经完成，目前正在同步测试记录、项目状态和开发日志，并准备建立最终稳定 Git checkpoint 与远程备份。
 
 ## Blocked
 
@@ -52,16 +60,24 @@ M1 板上运行验证。当前工程已经能够通过 GCC + CMake + Ninja 构�
 
 ## Known Bugs
 
-无已确认固件 Bug。已纠正并归档早期目标 MCU 型号不一致问题。
+无已确认固件 Bug。USART2 RX 尚未进行板级验证，但属于当前验证边界，不作为已知 Bug。
 
 ## Current Branch
 
-`feature/m1-bare-metal-baseline`，已关联远程 `origin/feature/m1-bare-metal-baseline`；`main` 与 `origin/main` 仍停留在 4e92819。
+`feature/m1-bare-metal-baseline`，已关联远程 `origin/feature/m1-bare-metal-baseline`。本地包含 `bacda60` 文档清理 checkpoint，并正在形成 M1 最终板级验证 checkpoint；`main` 与 `origin/main` 仍停留在 `4e92819`。
 
 ## Last Verified Function
 
-尚无板上固件功能通过验证。最近一次有效验证为 M1 构建基线：CubeMX 生成工程能够通过 CMake + Ninja + GNU Arm GCC 完成编译、汇编、链接并生成 .elf、.hex、.bin。该结果只证明工程可构建，不证明固件已经在 STM32F407VGT6 实物上正确运行。
+M1 STM32F407VGT6 裸机板级基线已经通过实际运行验证：
+- CMake + Ninja + GNU Arm GCC 构建成功。
+- ST-LINK 下载成功。
+- PB2 USER_LED 能够按照设定的 500 ms 延时周期稳定翻转。
+- USART2 TX 使用 PD5、115200 8N1，通过 3.3 V USB-TTL 在 PC 串口终端实际收到 `USART2 TX OK`。
+- 连续 3 次 NRST 后 LED 与 USART2 TX 均正常恢复。
+- 连续 3 次完全断电重新上电后 LED 与 USART2 TX 均正常恢复。
+
+当前证据不包含 USART2 RX、精确 500 ms 时序、长期稳定性、DMA 或 FreeRTOS 验证。
 
 ## Next Step
 
-使用 ST-LINK 对当前裸机基线进行板上验证。顺序为：目标识别与下载 → 最小 LED 心跳 → USART2 调试输出 → 多次复位运行检查。全部通过后再判定 M1 完成。
+完成 M1 测试记录和状态文档同步，建立最终 Known Good Baseline Git checkpoint 并推送到远程。确认工作区干净、远程分支同步后关闭 M1。下一阶段进入 M2，只建立最小 FreeRTOS 启动与任务调度基线。
