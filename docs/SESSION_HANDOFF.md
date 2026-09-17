@@ -2,7 +2,8 @@
 
 ## 当前 Milestone
 
-M1：STM32 裸机稳定基线。
+M1：STM32 裸机稳定基线，已完成。
+M2 尚未开始。。
 
 ## 当前 Branch
 
@@ -17,6 +18,13 @@ feature/m1-bare-metal-baseline，已关联远程 origin/feature/m1-bare-metal-ba
 - 已核对生成配置：SYSCLK/HCLK 168 MHz、APB1 42 MHz、APB2 84 MHz，PB2 为 USER_LED，USART2 使用 PD5/PD6、115200、8N1。
 - 当前工程已经通过 CMake + Ninja + GNU Arm GCC 构建，并成功生成 .elf、.hex、.bin。
 - CubeMX 裸机工程已经形成独立 Git checkpoint，并推送到远程功能分支。
+- CMake + Ninja + GNU Arm GCC 构建链已验证。
+- ST-LINK 下载已验证。
+- PB2 USER_LED heartbeat 已通过真实硬件验证。
+- USART2 TX 已通过 PD5 + USB-TTL + PC 串口终端验证。
+- 连续 3 次 NRST 均正常恢复。
+- 连续 3 次完全断电重新上电均正常恢复。
+- 当前裸机基线已达到可构建、可下载、可运行、可观测、可重复启动的 Known Good Baseline。
 
 ## 当前正在进行的任务
 
@@ -24,11 +32,7 @@ feature/m1-bare-metal-baseline，已关联远程 origin/feature/m1-bare-metal-ba
 
 ## 尚未完成的内容
 
-- 尚未使用 ST-LINK 对当前固件完成正式下载验证。
-- 尚未通过实物验证 PB2 LED 心跳。
-- 尚未通过 USB-TTL 验证 USART2 实际输出。
-- 尚未验证多次复位后的稳定启动行为。
-- M1 尚未达到 Known Good Baseline 验收标准。
+- USART2 RX 尚未进行真实板级验证，留待后续通信阶段。
 - 尚未进入 M2 FreeRTOS。
 
 ## 当前阻塞
@@ -50,7 +54,7 @@ TEST-20260915-02：CMake + Ninja + GNU Arm GCC 构建基线通过，可生成 .e
 
 ## 本次交接基于的 Commit
 
-`4fba6ba`：feat: add STM32F407VGT6 CubeMX bare-metal project。
+`b4b2865`：feat: establish verified M1 bare-metal baseline
 
 ## Working Tree 状态
 
