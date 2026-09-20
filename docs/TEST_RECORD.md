@@ -149,3 +149,29 @@
 - 结论：通过。当前 M1 裸机固件已经具备基本的可重复启动和可观测运行能力。
 - 边界：本测试只验证当前短周期人工复位和断电重启场景，不代表已经完成长时间运行、异常恢复或可靠性测试。
 
+## TEST-20260920-01：FreeRTOS 单任务调度基线验证
+
+- 目标：验证 FreeRTOS 能够在 STM32F407VGT6 上正常启动 scheduler 并运行最小 HeartbeatTask。
+- 配置：
+  - CMSIS-RTOS2
+  - FreeRTOS Tick：1000 Hz
+  - HAL Timebase：TIM6
+  - HeartbeatTask：osPriorityNormal，Stack 128 Words
+- 方法：
+  - HeartbeatTask 周期翻转 PB2 USER_LED。
+  - 使用 `osDelay(500U)` 阻塞任务。
+  - USART2 在 scheduler 启动前发送一次 `USART2 TX OK`。
+- 实际结果：
+  - CMake/Ninja 构建成功。
+  - ELF/HEX/BIN 均生成。
+  - 固件成功烧录。
+  - 上电/复位后 USART2 启动信息正常。
+  - HeartbeatTask 能持续运行，PB2 LED 按设定约 500 ms 翻转。
+  - NRST ×3 通过。
+  - 完全断电重新上电 ×3 通过。
+- 结论：通过。FreeRTOS scheduler、单用户任务运行及阻塞延时路径已在真实硬件上验证。
+- 边界：
+  - 尚未验证两个用户任务之间的调度。
+  - 尚未验证任务优先级、抢占、同步与通信。
+  - 500 ms 为软件设定值，未进行精密时序测量。
+
