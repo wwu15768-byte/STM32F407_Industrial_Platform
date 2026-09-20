@@ -258,3 +258,107 @@
 ## 明天下一步
 
 完成 M1 Git checkpoint 和远程同步后，冻结裸机 Known Good Baseline。下一项目阶段进入 M2，但首先只建立最小 FreeRTOS 启动与任务调度基线，不直接进入 ADC、DMA 或正式通信功能。
+
+# 2026-09-20
+
+## 今日计划
+
+- 从已经完成的 M1 STM32F407VGT6 裸机 Known Good Baseline 开始推进 M2。
+- 最小化引入 FreeRTOS，建立可构建、可烧录、可运行的单任务调度基线。
+- 在单任务基线稳定后增加第二个用户任务，验证两个同优先级任务能够稳定共存运行。
+- 为 M2 建立有意义的 Git checkpoint 和远程恢复点。
+
+## 实际完成
+
+- 确认当前位于 `feature/m2-freertos-baseline`，开发起点为 M1 最终提交 `0b6c86f`，工作区干净。
+- 确认 M2 开始前仓库中不存在 FreeRTOS 内核、CMSIS-RTOS 适配层或 TIM6 HAL 时基代码。
+- 将 HAL Timebase Source 从 SysTick 迁移到 TIM6，使 TIM6 提供 HAL 1 ms 时基，SysTick 用于 FreeRTOS Tick。
+- 在 CubeMX 中启用 FreeRTOS，接口采用 CMSIS-RTOS2。
+- 引入 FreeRTOS Kernel、ARM Cortex-M4F GCC port、CMSIS-RTOS2 wrapper、`heap_4` 和 `FreeRTOSConfig.h`。
+- 建立最小 `HeartbeatTask`，使用 PB2 USER_LED 和 `osDelay(500U)` 验证任务运行和阻塞延时。
+- 使用 CMake + Ninja + GNU Arm GCC 成功完成 FreeRTOS 工程配置、编译、链接和固件产物生成。
+- 确认 `.elf`、`.hex`、`.bin` 均成功生成并可以正常烧录。
+- 单任务版本在真实 STM32F407VGT6 上验证通过，LED heartbeat 正常。
+- 单任务版本连续执行 3 次 NRST 和 3 次完全断电重新上电，均正常恢复。
+- 创建并推送提交 `4d62a23`：`feat: establish FreeRTOS single-task baseline`。
+- 为 `feature/m2-freertos-baseline` 建立远程 upstream。
+- 新增 `UARTTask`，将 USART2 周期发送逻辑从 `main()` 迁移到 FreeRTOS 任务。
+- `HeartbeatTask` 与 `UARTTask` 均使用 `osPriorityNormal`。
+- `HeartbeatTask` 使用 `osDelay(500U)`，`UARTTask` 使用 `osDelay(1000U)`。
+- 双任务版本成功完成增量构建、链接和烧录。
+- 实物确认 LED heartbeat 与 USART2 周期输出能够同时稳定运行。
+- 双任务版本连续执行 3 次 NRST 和 3 次完全断电重新上电，均正常恢复。
+- 创建并推送提交 `a8e588c`：`feat: establish FreeRTOS dual-task baseline`。
+- 本地 `feature/m2-freertos-baseline` 与 `origin/feature/m2-freertos-baseline` 已同步，工作区干净。
+
+## 验收情况
+
+- M1 Known Good Baseline 继承：通过。
+- HAL Timebase 从 SysTick 迁移到 TIM6：通过。
+- FreeRTOS + CMSIS-RTOS2 集成：通过。
+- FreeRTOS Kernel、ARM_CM4F port 和 `heap_4` 构建：通过。
+- 单用户任务 scheduler 运行：通过。
+- `HeartbeatTask + osDelay(500U)`：通过。
+- 双用户任务稳定共存：通过。
+- `UARTTask + osDelay(1000U)`：通过。
+- CMake + Ninja + GCC 构建：通过。
+- ELF/HEX/BIN 生成：通过。
+- 固件烧录：通过。
+- NRST ×3：通过。
+- 完全断电重新上电 ×3：通过。
+- M2 单任务与双任务 Git checkpoint：已创建并推送远程。
+- 不同优先级抢占、精确时间片行为、任务同步与通信：尚未验证。
+
+## 未完成
+
+- 尚未通过专门实验验证不同优先级任务之间的抢占行为。
+- 尚未精确验证同优先级任务的时间片轮转行为。
+- 尚未测量 FreeRTOS heap 的运行时剩余量。
+- 尚未测量 HeartbeatTask 和 UARTTask 的实际栈余量。
+- 尚未进入 Queue、Task Notification、Mutex 等任务间通信与同步机制。
+- USART2 RX 尚未进行真实板级验证。
+
+## 今日 Bug
+
+- 无需要归档到 `ERROR_LOG.md` 的项目 Bug。
+- CubeMX 生成的 `cmake/stm32cubemx/CMakeLists.txt` 曾存在一处 trailing whitespace，提交前通过 `git diff --check` 发现并清理。
+- Git 检查过程中多次出现 CRLF 将被规范化为 LF 的提示，目前未造成源码功能或构建异常。
+- 曾将 `git status` 误输入为 `giy status`，属于一次性命令输入错误。
+- 新生成的 `.clangd` 仅包含 `build/Debug` 编译数据库路径，不属于当前 FreeRTOS 功能 checkpoint。
+
+## 今日学习
+
+- FreeRTOS 启动 scheduler 后，主要业务执行主体从裸机 `main()` 无限循环转移到各个 Task。
+- `osDelay()` 会使当前任务进入 Blocked 状态，而不是通过忙等持续占用当前执行机会。
+- 当所有用户任务都处于 Blocked 状态时，FreeRTOS 自动创建的 Idle Task 可以运行。
+- FreeRTOS 的 SysTick 负责内核 Tick；STM32 HAL 时基可以迁移到 TIM6，从而分离 HAL Tick 与 RTOS Tick 的职责。
+- SVC、PendSV 和 SysTick 是 Cortex-M FreeRTOS port 实现调度和上下文切换的重要异常机制。
+- `defaultTask` 只是 CubeMX 创建的普通用户任务，不等于 FreeRTOS Idle Task。
+- 同优先级任务都处于 Ready 状态时，调度器可以通过时间片、阻塞、唤醒或 yield 等调度点切换任务。
+- 高优先级 Ready Task 才具有对低优先级 Running Task 的优先级抢占能力。
+- `configTOTAL_HEAP_SIZE` 对应 FreeRTOS 自身的 heap，与链接脚本中的传统 C heap 不是同一个概念。
+- 链接器报告的静态 RAM 占用不能直接代表运行时 FreeRTOS heap 和 Task Stack 的实际使用量。
+- Git 中普通 `git diff` 不包含未跟踪文件；新增中间件时必须结合 `git status` 和暂存后的 `git diff --cached` 检查真实提交边界。
+- FreeRTOS 集成应分阶段建立单任务和双任务稳定 checkpoint，避免一次引入过多变量。
+
+## 尚未理解
+
+- 不同优先级任务从 Blocked 转为 Ready 时，抢占和 PendSV 上下文切换的完整时序仍需通过实验深化。
+- 同优先级任务时间片轮转的具体实现与切换条件仍需继续学习。
+- 尚未掌握 Task Stack High Water Mark 的实际测量和栈大小调整方法。
+- 尚未掌握 FreeRTOS heap 当前剩余量、最小剩余量和内存分配失败的监测方法。
+- 尚未实际处理多个任务竞争同一个共享资源时的同步问题。
+
+## Git
+
+- Branch：`feature/m2-freertos-baseline`
+- M2 起点：`0b6c86f`，`docs: close M1 and prepare M2 handoff`
+- 单任务 checkpoint：`4d62a23`，`feat: establish FreeRTOS single-task baseline`
+- 双任务 checkpoint：`a8e588c`，`feat: establish FreeRTOS dual-task baseline`
+- Remote：`origin/feature/m2-freertos-baseline`
+- 当前本地分支与远程 tracking branch 已同步。
+- Working Tree：clean。
+
+## 明天下一步
+
+继续 M2，不进入 ADC、DMA 或正式通信模块。先通过最小实验验证不同优先级任务之间的抢占行为，并学习和测量 Task Stack 与 FreeRTOS heap 的运行时使用情况；完成这些基础验证后，再进入任务间通信与同步机制。

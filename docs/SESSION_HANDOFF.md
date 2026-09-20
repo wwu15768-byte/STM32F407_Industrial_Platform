@@ -2,38 +2,56 @@
 
 ## 当前 Milestone
 
-M1：STM32 裸机稳定基线，已完成。
-M2 尚未开始。。
+M2：FreeRTOS 最小系统与调度基础，正在进行。
+
+M1 已完成并冻结为裸机 Known Good Baseline。
 
 ## 当前 Branch
 
-feature/m1-bare-metal-baseline，已关联远程 origin/feature/m1-bare-metal-baseline。
+`feature/m2-freertos-baseline`，已关联远程 `origin/feature/m2-freertos-baseline`。
+
+当前 HEAD：
+
+`a8e588c`：`feat: establish FreeRTOS dual-task baseline`
+
+本地分支与远程 tracking branch 已同步，工作区干净。
 
 ## 已经完成并验证的内容
 
-- M0 已完成；main 与 origin/main 指向 4e92819。
-- M1 硬件配置输入已通过 TEST-20260908-01 核对。
-- 已确认 STM32F407VGT6/LQFP-100、HSE 8 MHz、LSE 32.768 kHz、PB2 高电平点亮、USART2 PD5/PD6、ST-LINK V2 的 SWD+NRST 和 5 V 供电约束。
-- 已在 STM32CubeMX 中选择 STM32F407VGT6，并生成最小 HAL + CMake 裸机工程。
-- 已核对生成配置：SYSCLK/HCLK 168 MHz、APB1 42 MHz、APB2 84 MHz，PB2 为 USER_LED，USART2 使用 PD5/PD6、115200、8N1。
-- 当前工程已经通过 CMake + Ninja + GNU Arm GCC 构建，并成功生成 .elf、.hex、.bin。
-- CubeMX 裸机工程已经形成独立 Git checkpoint，并推送到远程功能分支。
-- CMake + Ninja + GNU Arm GCC 构建链已验证。
-- ST-LINK 下载已验证。
-- PB2 USER_LED heartbeat 已通过真实硬件验证。
-- USART2 TX 已通过 PD5 + USB-TTL + PC 串口终端验证。
-- 连续 3 次 NRST 均正常恢复。
-- 连续 3 次完全断电重新上电均正常恢复。
-- 当前裸机基线已达到可构建、可下载、可运行、可观测、可重复启动的 Known Good Baseline。
+- M0 已完成；`main` 与 `origin/main` 指向 `4e92819`。
+- M1 已完成；最终 M1 checkpoint 为 `0b6c86f`：`docs: close M1 and prepare M2 handoff`。
+- STM32F407VGT6 裸机基线已经完成构建、烧录、PB2 heartbeat、USART2 TX、NRST 和断电重启验证。
+- 已创建 `feature/m2-freertos-baseline` 并从完整 M1 Known Good Baseline 开始 FreeRTOS 集成。
+- HAL Timebase 已从 SysTick 迁移到 TIM6。
+- TIM6 当前提供 HAL 1 ms Tick。
+- SysTick 当前用于 FreeRTOS 1000 Hz Kernel Tick。
+- 已启用 FreeRTOS，接口采用 CMSIS-RTOS2。
+- 已加入 FreeRTOS Kernel、CMSIS-RTOS2 wrapper、ARM Cortex-M4F GCC port 和 `heap_4`。
+- 已生成并使用 `FreeRTOSConfig.h`。
+- `HeartbeatTask` 已完成实际运行验证，使用 `osPriorityNormal` 和 `osDelay(500U)`。
+- 单任务版本已通过构建、烧录、NRST ×3 和断电重新上电 ×3。
+- 单任务稳定 checkpoint 为 `4d62a23`：`feat: establish FreeRTOS single-task baseline`。
+- `UARTTask` 已完成实际运行验证，使用 `osPriorityNormal` 和 `osDelay(1000U)`。
+- `HeartbeatTask` 和 `UARTTask` 已在真实目标板上同时稳定运行。
+- 双任务版本已通过 NRST ×3 和断电重新上电 ×3。
+- 双任务稳定 checkpoint 为 `a8e588c`：`feat: establish FreeRTOS dual-task baseline`。
+- `feature/m2-freertos-baseline` 已推送远程并建立 upstream。
 
 ## 当前正在进行的任务
 
-准备对当前可构建裸机基线进行第一次板上运行验证。当前尚未进入 FreeRTOS。
+继续理解并验证 FreeRTOS 调度机制。
+
+当前已经证明单用户任务和两个同优先级用户任务能够正常运行，下一步准备通过最小实验验证不同优先级任务之间的抢占关系，并开始观察 Task Stack 和 FreeRTOS heap 的运行时使用情况。
 
 ## 尚未完成的内容
 
-- USART2 RX 尚未进行真实板级验证，留待后续通信阶段。
-- 尚未进入 M2 FreeRTOS。
+- 尚未通过专门实验验证不同优先级任务之间的抢占行为。
+- 尚未精确验证同优先级任务时间片轮转的具体行为。
+- 尚未测量 HeartbeatTask 和 UARTTask 的实际栈余量。
+- 尚未测量 FreeRTOS heap 当前剩余量和最小剩余量。
+- 尚未进入 Queue、Task Notification、Mutex 等任务间通信与同步。
+- USART2 RX 尚未进行真实板级验证。
+- 尚未进入 ADC、DMA、RS485 或 Modbus 功能阶段。
 
 ## 当前阻塞
 
@@ -41,25 +59,38 @@ feature/m1-bare-metal-baseline，已关联远程 origin/feature/m1-bare-metal-ba
 
 ## 已确认的重要技术决策
 
-- 固件只使用 STM32 HAL；M1 不引入 FreeRTOS。
-- CubeMX 必须选择 STM32F407VGT6，不得用 ZGT6 代替。
-- 调试串口使用 USART2：PD5/TX、PD6/RX，外接 3.3 V USB-TTL。
-- 外部 12 V 先降压为稳定 5 V，各设备共地，不并联 USB/ST-LINK 电源。
-- M1 主构建基线采用 CubeMX + CMake + Ninja + GNU Arm GCC；build/ 和 .elf/.hex/.bin 等构建产物不进入 Git。
+- 固件外设层继续统一使用 STM32 HAL。
+- 项目实际目标 MCU 为 STM32F407VGT6、LQFP-100。
+- FreeRTOS 接口采用 CMSIS-RTOS2。
+- HAL Timebase 使用 TIM6，SysTick 留给 FreeRTOS Kernel Tick。
+- M2 采用逐步验证方式：先建立单任务 baseline，再建立双任务 baseline，不一次引入 Queue、Mutex、DMA 或其他复杂机制。
+- 当前 HeartbeatTask 和 UARTTask 均使用 `osPriorityNormal`，先验证同优先级任务稳定共存，再进行优先级实验。
+- FreeRTOS heap 与链接脚本中的 C heap 分开理解和记录。
+- 每形成一个经过真实硬件验证的独立状态，就建立有意义的 Git checkpoint。
+- build/、.elf、.hex、.bin 等可重新生成的构建产物继续不进入 Git。
 
 ## 最近一次有效测试
 
-TEST-20260915-01：CubeMX 生成配置核对通过。
-TEST-20260915-02：CMake + Ninja + GNU Arm GCC 构建基线通过，可生成 .elf、.hex、.bin；该结果不代表板上运行通过。
+TEST-20260920-01：FreeRTOS 单任务调度基线验证通过。
+
+TEST-20260920-02：FreeRTOS 双用户任务调度基线验证通过；HeartbeatTask 与 UARTTask 均能够稳定运行，NRST ×3 和完全断电重新上电 ×3 均通过。
 
 ## 本次交接基于的 Commit
 
-`b4b2865`：feat: establish verified M1 bare-metal baseline
+`a8e588c`：feat: establish FreeRTOS dual-task baseline
 
 ## Working Tree 状态
 
-进入后续开发前，以 git status --short --branch 为准。本次文档同步提交并推送完成后，预期工作区干净，当前功能分支与远程 tracking branch 同步；若实际不一致，先检查差异。
+当前 `feature/m2-freertos-baseline` 与 `origin/feature/m2-freertos-baseline` 已同步。
+
+最近确认状态：
+
+`nothing to commit, working tree clean`
+
+进入下一次开发前仍应重新执行 `git status --short --branch`、`git log --oneline --decorate -5` 和 `git branch -vv` 核对真实状态。
 
 ## 下一步最合理的一个任务
 
-不要引入 FreeRTOS。先使用 ST-LINK 验证目标连接与固件下载，然后实现最小 PB2 LED 心跳，确认裸机程序能够在 STM32F407VGT6 上稳定运行。
+保持当前双任务稳定基线，不进入 ADC、DMA 或正式通信模块。
+
+先设计一个最小 FreeRTOS 优先级实验，验证高优先级 Ready Task 对低优先级 Running Task 的抢占行为；实验完成后再学习并测量 Task Stack High Water Mark 和 FreeRTOS heap 运行时余量。

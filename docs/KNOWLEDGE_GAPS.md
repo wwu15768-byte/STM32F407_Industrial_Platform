@@ -79,11 +79,11 @@ M1 最小裸机工程准备。
 
 ### 当前理解
 
-已在实际 CubeMX 工程中选择 STM32F407VGT6、LQFP-100。当前生成配置使用 8 MHz HSE，经 PLL 得到 168 MHz SYSCLK/HCLK；APB1 为 42 MHz，APB2 为 84 MHz。PB2 配置为 USER_LED GPIO 输出，USART2 使用 PD5/PD6，配置为 115200、8N1。
+已在实际 CubeMX 工程中选择 STM32F407VGT6、LQFP-100。当前系统使用 8 MHz HSE，经 PLL 得到 168 MHz SYSCLK/HCLK；APB1 为 42 MHz，APB2 为 84 MHz。PB2 已在真实目标板上完成 LED heartbeat 验证，USART2 PD5/TX 已通过 USB-TTL 完成真实发送验证。NRST 和完全断电重新上电均已重复验证。进入 M2 后，HAL Timebase 已从 SysTick 迁移到 TIM6，FreeRTOS 使用 SysTick 作为内核 Tick，当前双任务版本仍能稳定运行。
 
 ### 缺少什么
 
-CubeMX 配置层已经验证，但尚未通过 ST-LINK 和真实开发板证明系统时钟、PB2 GPIO、USART2 和复位启动行为正确。
+当前器件、时钟、基础 GPIO、USART2 TX 和启动链路已经完成当前阶段所需验证。USART2 RX 尚未验证；系统时钟精确频率尚未使用示波器或外部测量手段独立测量。
 
 ### 为什么重要
 
@@ -91,16 +91,50 @@ CubeMX 配置层已经验证，但尚未通过 ST-LINK 和真实开发板证明�
 
 ### 学习优先级
 
-不再继续扩展 CubeMX 配置。下一步通过最小板上实验验证下载链路、LED 心跳和 USART2 输出，再根据实测结果判断配置是否真正正确
+当前阶段基础已完成。USART2 RX 留待正式通信阶段；精确时钟测量按后续调试需求开展。
 
 ### 学习任务
 
-先核对 CubeMX 器件与封装，再逐步配置 SWD、RCC 和 Clock Configuration，每一步单独检查。
+后续正式进入双向 UART 通信时验证 USART2 RX；如果出现波特率、定时或外设时钟相关问题，再结合示波器、逻辑分析仪和时钟树进行进一步测量。
 
 ### 小实验
 
-下载当前裸机基线，通过 PB2 LED 周期翻转和 USART2 固定调试输出验证程序运行；重复复位并观察行为是否一致。
+已完成 STM32F407VGT6 裸机下载、PB2 LED heartbeat、USART2 TX、NRST ×3 和完全断电重新上电 ×3；进入 FreeRTOS 后上述 GPIO 和 UART 基础功能仍能在单任务和双任务系统中稳定运行。
 
 ### 状态
 
-配置层已验证，硬件运行层待验证。
+已掌握当前阶段所需基础。
+
+## KG-004：FreeRTOS 调度、任务状态与运行时资源
+
+### 来源
+
+M2 FreeRTOS 单任务和双任务调度基线建立过程。
+
+### 当前理解
+
+已经能够区分 Running、Ready、Blocked 和 Idle Task 的基本关系。理解 `osDelay()` 会使当前用户任务进入 Blocked 状态，并允许其他 Ready Task 或 Idle Task 获得 CPU。已经在真实 STM32F407VGT6 上验证一个 HeartbeatTask 和两个同优先级用户任务能够稳定运行。理解 SysTick 当前用于 FreeRTOS Tick，TIM6 用于 HAL Timebase；理解高优先级 Ready Task具有抢占低优先级 Running Task 的条件，同优先级任务可通过时间片、阻塞、唤醒和 yield 等调度点切换。
+
+### 缺少什么
+
+尚未通过专门实验观察不同优先级任务之间的实际抢占行为；尚未精确理解 PendSV 上下文切换过程和同优先级时间片实现；尚未测量 Task Stack High Water Mark、FreeRTOS heap 当前余量和最小余量。
+
+### 为什么重要
+
+后续 ADC 采集、通信、数据处理和设备管理都会依赖多个不同优先级任务。如果不能理解调度、阻塞、栈和 heap，就难以判断任务饿死、栈溢出、内存不足和实时性问题。
+
+### 学习优先级
+
+高。属于进入 Queue、Mutex 和正式多任务业务之前的 M2 核心基础。
+
+### 学习任务
+
+设计最小高低优先级任务实验，观察高优先级任务从 Blocked 转为 Ready 后的抢占行为；随后学习并调用 FreeRTOS/CMSIS-RTOS2 可用的栈与 heap 观测接口，记录两个用户任务和内核内存余量。
+
+### 小实验
+
+在当前 `a8e588c` 双任务稳定基线上，只改变任务优先级和可观察行为，不增加 Queue、Mutex 或新的业务模块；验证抢占行为后再测量任务栈和 FreeRTOS heap。
+
+### 状态
+
+进行中。
