@@ -91,15 +91,7 @@ int main(void)
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-  static const uint8_t usart2_test_message[] = "USART2 TX OK\r\n";
 
-  if( HAL_UART_Transmit(&huart2,
-                        usart2_test_message,
-                        (uint16_t)(sizeof(usart2_test_message) - 1U),  /*去掉 C 字符串末尾的 '\0'*/
-                        100U) != HAL_OK )
-  {
-    Error_Handler();
-  }
   /* USER CODE END 2 */
 
   /* Init scheduler */

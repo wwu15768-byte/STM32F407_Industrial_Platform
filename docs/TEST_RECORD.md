@@ -175,3 +175,28 @@
   - 尚未验证任务优先级、抢占、同步与通信。
   - 500 ms 为软件设定值，未进行精密时序测量。
 
+## TEST-20260920-02：FreeRTOS 双用户任务调度基线验证
+
+- 目标：验证两个同优先级 FreeRTOS 用户任务能够在 STM32F407VGT6 上稳定共存运行。
+- 配置：
+  - HeartbeatTask：osPriorityNormal，使用 `osDelay(500U)`。
+  - UARTTask：osPriorityNormal，使用 `osDelay(1000U)`。
+  - FreeRTOS Tick：1000 Hz。
+  - HAL Timebase：TIM6。
+- 方法：
+  - HeartbeatTask 周期翻转 PB2 USER_LED。
+  - UARTTask 周期通过 USART2 发送测试字符串。
+  - 同时观察 LED 与串口输出。
+  - 连续执行 3 次 NRST。
+  - 连续执行 3 次完全断电重新上电。
+- 实际结果：
+  - LED heartbeat 持续正常。
+  - UART 周期输出持续正常。
+  - 两个用户任务能够同时长期运行。
+  - NRST ×3 均正常恢复。
+  - Power-cycle ×3 均正常恢复。
+- 结论：通过。两个同优先级用户任务已在真实硬件上完成稳定运行验证，FreeRTOS 基本多任务调度能力成立。
+- 边界：
+  - 尚未单独验证不同优先级之间的抢占行为。
+  - 尚未验证时间片轮转的精确切换时刻。
+  - 尚未验证任务间同步、通信和共享资源竞争。
