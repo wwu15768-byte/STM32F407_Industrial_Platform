@@ -200,3 +200,48 @@
   - 尚未单独验证不同优先级之间的抢占行为。
   - 尚未验证时间片轮转的精确切换时刻。
   - 尚未验证任务间同步、通信和共享资源竞争。
+
+### TEST-20260922-01 — FreeRTOS 不同优先级抢占验证
+
+- 目标：验证 FreeRTOS 抢占式调度：当低优先级任务持续运行且不主动阻塞或让出 CPU 时，高优先级任务从 Blocked 状态恢复为 Ready 后能够抢占低优先级任务运行。
+- 配置：
+  - HeartbeatTask：osPriorityNormal，无 `osDelay()`、`osThreadYield()`和其他主动阻塞操作。
+  - UARTTask：osPriorityAboveNorma，每轮使用 `osDelay(1000U)`。
+  - `low_counter`：volatile uint32_t。
+- 方法：
+  - HeartbeatTask：持续执行 `low_counter++`。
+  - UARTTask：周期打印 `low_counter`和`USART2 TX OK`，同时翻转 USER_LED。
+  - `low_counter`：HeartbeatTask 写入后 UARTTask 读取。
+  - 连续执行 3 次 NRST。
+  - 连续执行 3 次完全断电重新上电。
+- 实际结果：
+  - 连续运行时 UARTTask 能够稳定周期执行，LED 正常翻转，UART 正常输出。
+  - 部分串口数据：
+      ```text
+      USART2 TX OK  low_counter = 234449906
+      USART2 TX OK  low_counter = 251196147
+      USART2 TX OK  low_counter = 267942352
+      USART2 TX OK  low_counter = 284688672
+      USART2 TX OK  low_counter = 301434957
+      USART2 TX OK  low_counter = 318181206
+      USART2 TX OK  low_counter = 334927430
+      USART2 TX OK  low_counter = 351673758
+      ```
+      相邻采样之间 `low_counter` 大约增加 1674 万，表明 UARTTask 处于 Blocked 状态时 HeartbeatTask 持续获得 CPU 运行。
+  - 两个用户任务能够同时长期运行。
+  - NRST ×3 均正常恢复。
+  - 复位后的典型输出：
+      ```text
+      USART2 TX OK  low_counter = 0
+      USART2 TX OK  low_counter = 16741181
+      USART2 TX OK  low_counter = 33488882
+      USART2 TX OK  low_counter = 50236544
+      ```
+  - Power-cycle ×3 均正常恢复。
+- 结论：通过，不同优先级的两个任务持续运行正常，高优先级成功抢占CPU，FreeRTOS 抢占式优先级调度行为成功实现。
+- 边界：
+  - 未验证同优先级任务时间片轮转；
+  - 未实现UART 多任务并发访问；
+  - 未接入 Mutex / Semaphore / Queue；
+  - 未确认 Task Stack 是否具有足够长期安全余量；
+  - 未确认 FreeRTOS Heap 长期使用情况。

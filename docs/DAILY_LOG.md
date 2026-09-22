@@ -329,7 +329,7 @@
 ## 今日学习
 
 - FreeRTOS 启动 scheduler 后，主要业务执行主体从裸机 `main()` 无限循环转移到各个 Task。
-- `osDelay()` 会使当前任务进入 Blocked 状态，而不是通过忙等持续占用当前执行机会。
+- `osDelay()` 会使当前任务进入 Blocked 状态，不通过忙等持续占用当前执行机会。
 - 当所有用户任务都处于 Blocked 状态时，FreeRTOS 自动创建的 Idle Task 可以运行。
 - FreeRTOS 的 SysTick 负责内核 Tick；STM32 HAL 时基可以迁移到 TIM6，从而分离 HAL Tick 与 RTOS Tick 的职责。
 - SVC、PendSV 和 SysTick 是 Cortex-M FreeRTOS port 实现调度和上下文切换的重要异常机制。

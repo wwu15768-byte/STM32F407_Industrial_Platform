@@ -26,6 +26,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "usart.h"
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -45,7 +46,7 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-
+volatile uint32_t low_counter = 0;
 /* USER CODE END Variables */
 /* Definitions for HeartbeatTask */
 osThreadId_t HeartbeatTaskHandle;
@@ -59,7 +60,7 @@ osThreadId_t UARTTaskHandle;
 const osThreadAttr_t UARTTask_attributes = {
   .name = "UARTTask",
   .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityAboveNormal,
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -128,8 +129,7 @@ void StartHeartbeatTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-    HAL_GPIO_TogglePin(GPIOB, USER_LED_Pin);
-    osDelay(500U);
+    low_counter++;
   }
   /* USER CODE END StartHeartbeatTask */
 }
@@ -144,10 +144,15 @@ void StartHeartbeatTask(void *argument)
 void StartUARTTask(void *argument)
 {
   /* USER CODE BEGIN StartUARTTask */
-  static const uint8_t usart2_test_message[] = "USART2 TX OK\r\n";
+  static const uint8_t usart2_test_message[] = "USART2 TX OK  ";
+  static char txt_buff[32];
   /* Infinite loop */
   for(;;)
   {
+    int len = sniprintf(txt_buff,
+                      sizeof(txt_buff),
+                      "low_counter = %lu\r\n", /*当low_counter = 123，最终输出"low_counter = 123\r\n"*/
+                      (unsigned long)low_counter);
     if( HAL_UART_Transmit(&huart2,
                           usart2_test_message,
                           (uint16_t)(sizeof(usart2_test_message) - 1U),  /*去掉 C 字符串末尾的 '\0'*/
@@ -155,6 +160,15 @@ void StartUARTTask(void *argument)
     {
       Error_Handler();
     }
+
+    if( HAL_UART_Transmit(&huart2,
+                          (uint8_t *)txt_buff,
+                          (uint16_t)len,  /*去掉 C 字符串末尾的 '\0'*/
+                          100U) != HAL_OK )
+    {
+      Error_Handler();
+    }
+    HAL_GPIO_TogglePin(GPIOB, USER_LED_Pin);
     osDelay(1000U);
   }
   /* USER CODE END StartUARTTask */
