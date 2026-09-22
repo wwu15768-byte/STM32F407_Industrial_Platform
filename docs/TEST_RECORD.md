@@ -245,3 +245,143 @@
   - 未接入 Mutex / Semaphore / Queue；
   - 未确认 Task Stack 是否具有足够长期安全余量；
   - 未确认 FreeRTOS Heap 长期使用情况。
+
+## TEST-20260922-02：FreeRTOS Task Stack 运行时余量验证
+
+- 目标：
+  - 验证 FreeRTOS 用户任务的运行时 Stack 历史最小剩余空间能够被观测。
+  - 评估 HeartbeatTask 和 UARTTask 当前 Stack 配置是否具有合理余量。
+  - 对 UARTTask 初始 Stack 余量不足问题进行调整并重新验证。
+
+- 配置：
+  - HeartbeatTask：
+    - Priority：`osPriorityNormal`
+    - Stack：128 Words（512 B）
+  - UARTTask：
+    - Priority：`osPriorityAboveNormal`
+    - 初始 Stack：128 Words（512 B）
+  - HeartbeatTask 持续执行 `low_counter++`，不主动阻塞或让出 CPU。
+  - UARTTask 周期执行格式化输出、USART2 发送、LED 翻转及 `osDelay(1000U)`。
+  - 使用 `osThreadGetStackSpace()` 获取任务历史最小剩余 Stack 空间。
+
+- 方法：
+  - 保持已验证的不同优先级抢占任务结构。
+  - UARTTask 启动后先运行多个周期，使实际函数调用路径得到执行。
+  - 周期读取 HeartbeatTask 和 UARTTask 的历史最小剩余 Stack。
+  - 首先测量 UARTTask 为 512 B Stack 时的运行余量。
+  - 根据首次测试结果，将 UARTTask Stack 从 128 Words（512 B）增加至 256 Words（1024 B）。
+  - 重新构建、烧录并连续运行，验证调整后的 Stack 余量。
+
+- 初始测试结果：
+  - HeartbeatTask：
+    - 配置 Stack：512 B
+    - 历史最小剩余：432 B
+    - 历史峰值使用约：80 B
+    - 峰值使用率约：15.6%
+  - UARTTask：
+    - 配置 Stack：512 B
+    - 历史最小剩余：64 B
+    - 历史峰值使用约：448 B
+    - 峰值使用率约：87.5%
+  - UARTTask 仅剩 64 B 历史最小余量，不适合作为后续功能扩展的稳定 Stack 配置。
+
+- 调整：
+  - 将 UARTTask Stack 从 128 Words（512 B）增加至 256 Words（1024 B）。
+  - HeartbeatTask Stack 保持 128 Words（512 B）不变。
+
+- 调整后实际结果：
+  - HeartbeatTask 历史最小剩余 Stack 稳定为 432 B。
+  - UARTTask 在仅启用 Stack 观测时历史最小剩余 Stack 稳定为 576 B。
+  - 加入 Heap 观测路径后，UARTTask 历史最小剩余 Stack 稳定为 560 B。
+  - UARTTask 当前完整测试路径历史峰值 Stack 使用量约为：
+    - 1024 B - 560 B = 464 B
+    - 峰值使用率约 45.3%
+  - 新增 Heap 观测调用路径后，UARTTask 峰值 Stack 使用量相比仅进行 Stack 观测时增加约 16 B。
+  - HeartbeatTask 当前完整测试路径历史峰值 Stack 使用量仍约为 80 B。
+  - 连续多轮运行期间 Stack 数据稳定。
+
+- 构建结果：
+  - RAM：21024 B / 128 KB，16.04%
+  - FLASH：24712 B / 1 MB，2.36%
+
+- 结论：
+  - PASS。
+  - `osThreadGetStackSpace()` 能够稳定观测任务历史最小剩余 Stack。
+  - HeartbeatTask 当前 512 B Stack 具有充足余量。
+  - UARTTask 原 512 B Stack 余量偏小。
+  - UARTTask 调整至 1024 B 后，在当前完整测试路径下历史最小剩余约 560 B，具备明显更合理的开发余量。
+  - Task Stack 使用量会随实际调用路径变化，后续增加功能后仍需重新测量。
+
+- 边界：
+  - 当前结果仅覆盖 M2 当前实际执行路径。
+  - 尚未包含 Queue、Mutex、Task Notification、ADC/DMA、协议处理及后续业务任务带来的 Stack 消耗。
+  - 当前测试不能证明未来完整系统中 1024 B UARTTask Stack 永久足够。
+  - 后续重要功能加入后应重新检查 Stack High Water Mark。
+
+## TEST-20260922-03：FreeRTOS Heap 运行时余量验证
+
+- 目标：
+  - 验证当前 M2 系统中 FreeRTOS Heap 的运行时占用情况。
+  - 获取当前剩余 Heap 和系统启动以来历史最小剩余 Heap。
+  - 验证系统连续运行及 NRST 重启后 Heap 状态是否稳定、可重复。
+
+- 配置：
+  - `configTOTAL_HEAP_SIZE`：15360 B。
+  - HeartbeatTask：
+    - Priority：`osPriorityNormal`
+    - Stack：512 B
+  - UARTTask：
+    - Priority：`osPriorityAboveNormal`
+    - Stack：1024 B
+  - 使用 `xPortGetFreeHeapSize()` 获取当前剩余 FreeRTOS Heap。
+  - 使用 `xPortGetMinimumEverFreeHeapSize()` 获取历史最小剩余 FreeRTOS Heap。
+  - 同时继续使用 `osThreadGetStackSpace()` 观测两个用户任务的 Stack 余量。
+
+- 方法：
+  - 保持当前抢占调度和 Stack 观测任务结构不变。
+  - UARTTask 周期读取当前 FreeRTOS Heap 剩余量和历史最低剩余量。
+  - 通过 USART2 周期输出 Heap 和 Task Stack 数据。
+  - 连续运行多个周期观察数值稳定性。
+  - 执行 NRST 三次，验证每次重新启动后的资源状态是否可重复。
+
+- 实际结果：
+  - FreeRTOS Heap 总大小：15360 B。
+  - Current Free Heap：13592 B。
+  - Minimum Ever Free Heap：13592 B。
+  - 当前 FreeRTOS Heap 已使用约：
+    - 15360 B - 13592 B = 1768 B
+    - 使用率约 11.51%
+  - 当前 FreeRTOS Heap 剩余约：
+    - 13592 B
+    - 剩余率约 88.49%
+  - 连续运行期间 `Heap` 与 `MinHeap` 始终稳定为 13592 B。
+  - HeartbeatTask 历史最小剩余 Stack 稳定为 432 B。
+  - UARTTask 历史最小剩余 Stack 稳定为 560 B。
+  - UARTTask 当前完整测试路径历史峰值 Stack 使用量约为：
+    - 1024 B - 560 B = 464 B
+    - 峰值使用率约 45.3%
+  - 执行 NRST 三次后：
+    - Current Free Heap 均重新稳定为 13592 B。
+    - Minimum Ever Free Heap 均重新稳定为 13592 B。
+    - HeartbeatTask 历史最小剩余 Stack 均为 432 B。
+    - UARTTask 历史最小剩余 Stack 均为 560 B。
+  - 三次重启后的资源状态具有一致性和可重复性。
+
+- 构建结果：
+  - RAM：21024 B / 128 KB，16.04%
+  - FLASH：24712 B / 1 MB，2.36%
+
+- 结论：
+  - PASS。
+  - `xPortGetFreeHeapSize()` 与 `xPortGetMinimumEverFreeHeapSize()` 能够稳定观测当前 FreeRTOS Heap 状态。
+  - 当前 M2 基线中 FreeRTOS Heap 已使用约 1768 B，约占总 Heap 的 11.51%。
+  - 当前剩余 Heap 约 13592 B，占总 Heap 的约 88.49%。
+  - 当前测试期间 Current Free Heap 与 Minimum Ever Free Heap 一致，未观察到系统启动完成后进一步降低历史最低 Heap 的动态分配行为。
+  - NRST 三次后的 Heap 与 Stack 数据均能够恢复到相同稳定值。
+  - 当前 M2 系统具有较充足的 FreeRTOS Heap 余量。
+
+- 边界：
+  - 当前 Heap 使用情况仅代表 M2 当前任务和 RTOS 对象配置。
+  - 尚未加入 Queue、Mutex、Semaphore、Task Notification、ADC/DMA 及后续业务任务。
+  - 后续创建新的 RTOS 对象后，应重新检查 Current Free Heap 和 Minimum Ever Free Heap。
+  - 当前 88.49% 的剩余 Heap 不代表完整系统阶段仍会保持相同余量。

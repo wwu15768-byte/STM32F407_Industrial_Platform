@@ -26,6 +26,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "usart.h"
+#include <stdint.h>
 #include <stdio.h>
 /* USER CODE END Includes */
 
@@ -59,7 +60,7 @@ const osThreadAttr_t HeartbeatTask_attributes = {
 osThreadId_t UARTTaskHandle;
 const osThreadAttr_t UARTTask_attributes = {
   .name = "UARTTask",
-  .stack_size = 128 * 4,
+  .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityAboveNormal,
 };
 
@@ -145,7 +146,8 @@ void StartUARTTask(void *argument)
 {
   /* USER CODE BEGIN StartUARTTask */
   static const uint8_t usart2_test_message[] = "USART2 TX OK  ";
-  static char txt_buff[32];
+  static char txt_buff[96];
+  static uint32_t stack_sample_count = 0U;
   /* Infinite loop */
   for(;;)
   {
@@ -160,15 +162,49 @@ void StartUARTTask(void *argument)
     {
       Error_Handler();
     }
-
-    if( HAL_UART_Transmit(&huart2,
-                          (uint8_t *)txt_buff,
-                          (uint16_t)len,  /*去掉 C 字符串末尾的 '\0'*/
-                          100U) != HAL_OK )
+    if(len > 0)
     {
-      Error_Handler();
+      if( HAL_UART_Transmit(&huart2,
+                            (uint8_t *)txt_buff,
+                            (uint16_t)len,  /*去掉 C 字符串末尾的 '\0'*/
+                            100U) != HAL_OK )
+      {
+        Error_Handler();
+      }
     }
+
     HAL_GPIO_TogglePin(GPIOB, USER_LED_Pin);
+
+    stack_sample_count ++; /*在 StartUARTTask 执行一段时间后开始检测剩余栈，以防任务未开始导致测量不准*/
+
+    if(stack_sample_count >= 5U)
+    {
+      uint32_t heartbeat_stack_free;
+      uint32_t uart_stack_free;
+      size_t heap_free;
+      size_t heap_min_free;
+      heartbeat_stack_free = osThreadGetStackSpace(HeartbeatTaskHandle);
+      uart_stack_free = osThreadGetStackSpace(UARTTaskHandle);
+      heap_free = xPortGetFreeHeapSize();
+      heap_min_free = xPortGetMinimumEverFreeHeapSize();
+      len = sniprintf(txt_buff,
+                      sizeof(txt_buff),
+                      "HearFree = %lu B  UARTFree = %lu B Heap=%lu B MinHeap=%lu B\r\n",
+                      (unsigned long)heartbeat_stack_free,
+                      (unsigned long)uart_stack_free,
+                      (unsigned long)heap_free,
+                      (unsigned long)heap_min_free);
+      if(len > 0)
+      {
+        if( HAL_UART_Transmit(&huart2,
+                              (uint8_t *)txt_buff,
+                              (uint16_t)len,  /*去掉 C 字符串末尾的 '\0'*/
+                              100U) != HAL_OK )
+        {
+          Error_Handler();
+        }
+      }
+    }
     osDelay(1000U);
   }
   /* USER CODE END StartUARTTask */
