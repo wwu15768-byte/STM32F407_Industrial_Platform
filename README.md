@@ -1,12 +1,19 @@
 # STM32F407 Industrial Platform
 
-本项目以 STM32F407ZGT6 为核心，逐步实现一个基于 FreeRTOS 的工业实时数据采集与设备管理平台，同时将项目作为嵌入式软件工程实践载体，训练驱动开发、RTOS、通信、测试、调试、Git 和工程文档能力。本仓库采用 STM32 HAL、CMake、Ninja 和 Arm GNU Toolchain (arm-none-eabi)，逐步建立可复现、可验证、便于维护的固件工程。
+本项目以 STM32F407VGT6 为核心，逐步实现一个基于 FreeRTOS 的工业实时数据采集与设备管理平台，同时将项目作为嵌入式软件工程实践载体，训练驱动开发、RTOS、通信、测试、调试、Git 和工程文档能力。本仓库采用 STM32 HAL、CMake、Ninja 和 Arm GNU Toolchain (arm-none-eabi)，逐步建立可复现、可验证、便于维护的固件工程。
 
-当前处于 **M0：项目基础设施搭建阶段**，尚未生成 STM32 工程，也不包含正式业务功能。
+当前处于 **M1：STM32 裸机稳定基线阶段**。硬件配置输入已经确认，尚未生成 STM32 工程，也不包含正式业务功能。
 
 ## 硬件与软件约束
 
-- 目标 MCU：STM32F407ZGT6（ARM Cortex-M4F）。
+- 开发板：立创·天空星 STM32F407VGT6 高配版。
+- 官方资料：[产品页](https://lckfb.com/project/detail/lckfb-lspi-skystar-stm32f407vgt6-pro?param=baseInfo)、[开发板文档](https://wiki.lckfb.com/zh-hans/fdb/skystar.html)。
+- 目标 MCU：STM32F407VGT6（ARM Cortex-M4F，LQFP-100）。
+- 时钟：HSE 8 MHz；LSE 32.768 kHz，已安装。
+- 用户 LED：PB2/BOOT1，高电平点亮，上电默认保持低电平熄灭。
+- 调试串口：USART2，PD5/USART2_TX、PD6/USART2_RX，外接 3.3 V USB-TTL。
+- 下载调试：ST-LINK V2 STM8&STM32，使用 SWD，并连接 NRST。
+- 供电：外部 12 V 经降压模块输出稳定 5 V，再接开发板 5 V 输入；所有设备共地，不同时由 USB 或 ST-LINK 供电。
 - 固件库：必须使用 STM32 HAL；除非另有明确要求，不使用 SPL 或 LL。
 - 语言标准：C99/C11，兼顾嵌入式内存限制和字节对齐。
 - 实现原则：保持简单、模块低耦合、检查 HAL 返回值、ISR 短小且不执行阻塞操作。
@@ -43,7 +50,7 @@ arm-none-eabi-objcopy / arm-none-eabi-size
     ↓ 生成并检查 .elf / .bin / .hex
 STM32CubeProgrammer / ST-LINK
     ↓
-STM32F407ZGT6
+STM32F407VGT6
 ```
 
 ## 当前目录
@@ -70,7 +77,7 @@ CubeMX 生成的 `Core/`、`Drivers/`、启动文件、链接脚本、`.ioc` 和
 
 ## 当前构建状态
 
-M0 阶段没有可编译目标，因此暂不提供构建命令。进入下一里程碑并由 STM32CubeMX 生成基础工程后，再建立和验证 CMake 配置。
+硬件基线已确认，目前仍没有可编译目标。下一步使用 STM32CubeMX 为 STM32F407VGT6 生成最小 HAL 工程，再建立并验证 CMake 配置。
 
 ## 文档
 
@@ -84,6 +91,7 @@ M0 阶段没有可编译目标，因此暂不提供构建命令。进入下一�
 | [`ERROR_LOG.md`](docs/ERROR_LOG.md) | 什么坏了，为什么，怎么修？ | 出现有学习价值的问题 |
 | [`TEST_RECORD.md`](docs/TEST_RECORD.md) | 怎么证明它工作？ | 正式验证时 |
 | [`KNOWLEDGE_GAPS.md`](docs/KNOWLEDGE_GAPS.md) | 我还有什么不会？ | 发现或解决知识缺口 |
+| [`SESSION_HANDOFF.md`](docs/SESSION_HANDOFF.md) | 下一次会话从哪里继续？ | 会话切换前 |
 
 ## 实现原则
 

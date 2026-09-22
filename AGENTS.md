@@ -22,6 +22,19 @@
 
 > 完成一个结构合理、能够稳定运行、能够展示、能够解释、能够调试、有完整开发记录的工程Demo。
 
+## 1.1 硬件基线
+
+* 开发板：立创·天空星 STM32F407VGT6 高配版；
+* MCU：STM32F407VGT6，LQFP-100；
+* HSE：8 MHz；
+* LSE：32.768 kHz，已安装；
+* 用户 LED：PB2/BOOT1，高电平点亮；
+* 调试串口：USART2，PD5/USART2_TX、PD6/USART2_RX，3.3 V TTL；
+* 下载调试：ST-LINK V2 STM8&STM32，SWD，并连接 NRST；
+* 供电：外部 12 V 经降压模块转换为稳定 5 V 后接入开发板 5 V，所有设备共地，不同时由 USB 或 ST-LINK 供电。
+
+CubeMX 必须选择准确的 STM32F407VGT6 器件，不得使用 STM32F407ZGT6 或其他封装代替。
+
 ---
 
 # 2. 用户当前基础
@@ -434,6 +447,8 @@ RS485物理通信未验证：
 # 7. 每次项目开始前
 
 先读取：
+
+docs/SESSION_HANDOFF.md
 
 docs/ROADMAP.md
 
