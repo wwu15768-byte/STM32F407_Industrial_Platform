@@ -3,15 +3,15 @@
 > 唯一回答：项目现在在哪？
 > 更新时机：项目状态发生明显变化时。
 
-更新时间：2026-09-20
+更新时间：2026-09-24
 
 ## Current Milestone
 
-M2：FreeRTOS 最小系统与调度基础。FreeRTOS 已完成最小集成，单用户任务和双用户任务调度基线均已通过真实 STM32F407VGT6 板级验证。
+M2：FreeRTOS 最小系统与调度基础，已完成。当前已形成经过真实 STM32F407VGT6 板级验证的 M2 Final Baseline，下一阶段准备进入 M3：线程安全、可裁剪的调试基础设施。
 
 ## Current Goal
 
-在已经验证的 FreeRTOS 双任务基线上继续理解和验证调度机制：完成不同优先级任务抢占实验，测量 Task Stack 与 FreeRTOS heap 的运行时余量，并为后续任务间通信与同步建立可靠基础。
+完成 M2 最终文档和 Git 收尾，将已经通过单任务、双任务、优先级抢占、同优先级时间片、Task Stack、FreeRTOS Heap、NRST 和完全断电重新上电验证的 FreeRTOS baseline 固化并同步到远程。完成后进入 M3，优先建立线程安全、可裁剪的 UART 日志与调试基础设施。
 
 ## Completed
 
@@ -66,10 +66,33 @@ M2：FreeRTOS 最小系统与调度基础。FreeRTOS 已完成最小集成，单
 - 双任务版本 NRST ×3 和完全断电重新上电 ×3 均通过。
 - 已形成并推送 `a8e588c`：`feat: establish FreeRTOS dual-task baseline`。
 - 当前 M2 已达到可构建、可烧录、可启动、可观测并可重复运行的 FreeRTOS 双用户任务基线状态。
+- 已通过最小实验验证不同优先级任务抢占行为，高优先级 UARTTask 能够在从 Blocked 恢复为 Ready 后抢占持续运行的低优先级任务。
+- 已形成 46aef6a：feat: verify FreeRTOS priority preemption。
+- 已使用 osThreadGetStackSpace() 完成 HeartbeatTask 和 UARTTask 的运行时 Stack High Water Mark 验证。
+- UARTTask 初始 512 B Stack 历史最小剩余仅 64 B，因此根据实际测量将 Stack 调整至 1024 B。
+- UARTTask 调整至 1024 B 后，在当前完整运行路径下历史最小剩余 Stack 稳定约为 560 B。
+- 已使用 xPortGetFreeHeapSize() 和 xPortGetMinimumEverFreeHeapSize() 完成 FreeRTOS Heap 运行时观测。
+- 当前 configTOTAL_HEAP_SIZE 为 15360 B，Current Free Heap 和 Minimum Ever Free Heap 均稳定为 13592 B。
+- 已形成 51f143c：feat: add FreeRTOS runtime resource monitoring。
+- 已核对 configUSE_PREEMPTION = 1。
+- 已确认 configUSE_TIME_SLICING 当前最终有效值为 1。
+- 已建立两个相同 osPriorityNormal 优先级、持续 Ready 的 Busy Task，完成同优先级时间片调度行为验证。
+- BusyTaskA 和 BusyTaskB 的计数器均持续增长，证明两个同优先级持续 Ready Task 均能够持续获得 CPU 执行机会。
+- 同优先级时间片实验连续 3 次 NRST 均能够重复正常运行。
+- 时间片实验完成后已删除 BusyTask 测试结构并恢复正常周期任务 baseline。
+- 当前最终任务结构为 HeartBeatTask + UARTTask，两个任务均使用 osPriorityNormal 并通过 osDelay() 主动阻塞。
+- HeartBeatTask 使用 512 B Stack，最终 baseline 历史最小剩余约 384 B。
+- UARTTask 使用 1024 B Stack，最终 baseline 历史最小剩余约 560 B。
+- 最终 baseline 中 FreeRTOS Current Free Heap 和 Minimum Ever Free Heap 均稳定为 13592 B。
+- M2 Final Baseline 已完成 NRST ×3 和完全断电重新上电 ×3 验证。
+- 未观察到 HardFault、Hang、任务异常停止或 Heap 持续下降。
+- 已清理 CubeMX/编辑器产生的大量 CRLF/LF EOL-only 工作区噪音，最终功能修改边界仅保留 .ioc 与 Src/freertos.c。
+- 已形成 9c7333b：feat: finalize FreeRTOS scheduling baseline。
+- 当前 M2 已达到可构建、可烧录、可运行、可观测、可重复启动并具有基础运行时资源监测能力的稳定 FreeRTOS baseline。
 
 ## In Progress
 
-M2 FreeRTOS 调度机制学习与验证。当前单任务和双任务基础运行已经完成，正在准备验证不同优先级任务之间的抢占行为，并开始建立 Task Stack 与 FreeRTOS heap 的运行时资源观测能力。
+M2 最终文档和 Git 收尾。M2 功能代码与板级验证已经完成，目前正在同步测试记录、项目状态、开发日志、知识缺口、路线图、README 和会话交接；文档 checkpoint 完成后统一推送远程并关闭 M2。
 
 ## Blocked
 
@@ -79,34 +102,42 @@ M2 FreeRTOS 调度机制学习与验证。当前单任务和双任务基础运�
 
 无已确认固件 Bug。
 
-当前尚未验证 USART2 RX、不同优先级抢占、精确时间片行为、Task Stack 余量和 FreeRTOS heap 运行时余量，这些属于当前验证边界和后续学习任务，不作为已知 Bug。
+USART2 RX、Queue、Task Notification、Mutex、ADC、DMA、RS485 和 Modbus 尚未进行当前阶段验证，属于后续里程碑范围，不作为已知 Bug。
 
 ## Current Branch
 
 `feature/m2-freertos-baseline`，已关联远程 `origin/feature/m2-freertos-baseline`。
 
-当前 HEAD 为 `a8e588c`：`feat: establish FreeRTOS dual-task baseline`，本地分支与远程 tracking branch 已同步，工作区干净。
+当前 M2 最终功能 checkpoint 为 `9c7333b`：`feat: finalize FreeRTOS scheduling baseline`。
 
-M1 最终分支 `feature/m1-bare-metal-baseline` 与远程均停留在 `0b6c86f`；`main` 与 `origin/main` 仍停留在 `4e92819`。
+该提交创建后本地分支领先远程 1 个 commit，当前正在进行 M2 最终文档同步；文档 checkpoint 完成后再统一 push。
+
+M1 最终分支 `feature/m1-bare-metal-baseline` 保持在 `0b6c86f`；main 与 origin/main 仍保持原稳定基线。
 
 ## Last Verified Function
 
-M2 FreeRTOS 双用户任务基线已经通过 STM32F407VGT6 真实硬件验证：
+M2 FreeRTOS Final Baseline 已经通过 STM32F407VGT6 真实硬件验证：
+- HAL Timebase 使用 TIM6。
+- FreeRTOS 使用 SysTick 作为 1000 Hz Kernel Tick。
+- FreeRTOS Kernel、CMSIS-RTOS2、ARM_CM4F port 和 heap_4 已正常构建和运行。
+- configUSE_PREEMPTION = 1。
+- configUSE_TIME_SLICING = 1。
+- 已验证一个用户任务、两个周期任务、不同优先级抢占和同优先级时间片调度行为。
+- HeartBeatTask 使用 osPriorityNormal、512 B Stack 和 osDelay(500U)，持续驱动 PB2 USER_LED heartbeat。
+- UARTTask 使用 osPriorityNormal、1024 B Stack 和 osDelay(1000U)，持续通过 USART2 输出状态信息。
+- HeartBeatTask 历史最小剩余 Stack 约为 384 B。
+- UARTTask 历史最小剩余 Stack 约为 560 B。
+- FreeRTOS Current Free Heap 为 13592 B。
+- FreeRTOS Minimum Ever Free Heap 为 13592 B。
+- 连续 3 次 NRST 后系统均恢复正常。
+- 连续 3 次完全断电重新上电后系统均恢复正常。
+- 未观察到 HardFault、Hang 或运行时 Heap 持续下降。
+- 当前稳定功能 checkpoint 为 9c7333b。
 
-- HAL Timebase 已从 SysTick 迁移到 TIM6。
-- FreeRTOS 使用 SysTick 作为 1000 Hz 内核 Tick。
-- FreeRTOS Kernel、CMSIS-RTOS2、ARM_CM4F port 和 `heap_4` 已成功参与实际构建。
-- CMake + Ninja + GNU Arm GCC 构建成功。
-- .elf、.hex、.bin 均正常生成并成功烧录。
-- `HeartbeatTask` 使用 `osPriorityNormal` 和 `osDelay(500U)`，持续驱动 PB2 USER_LED heartbeat。
-- `UARTTask` 使用 `osPriorityNormal` 和 `osDelay(1000U)`，持续通过 USART2 输出测试信息。
-- 两个同优先级用户任务能够同时稳定运行。
-- 连续 3 次 NRST 后两个任务均恢复正常。
-- 连续 3 次完全断电重新上电后两个任务均恢复正常。
-- 当前稳定工程 checkpoint 为 `a8e588c`。
-
-当前证据不包含不同优先级抢占的专门验证、精确时间片测量、Task Stack/FreeRTOS heap 运行时余量、任务间同步通信以及 USART2 RX。
+当前证据不包含 USART2 RX、任务间正式通信与同步、线程安全多任务日志、ADC/DMA、RS485、Modbus 或长时间压力测试。
 
 ## Next Step
 
-继续 M2。在当前 `a8e588c` 双任务稳定基线上设计最小优先级实验，验证高优先级 Ready Task 对低优先级 Running Task 的抢占行为；随后使用 FreeRTOS 提供的运行时接口观察任务栈和 heap 余量。完成调度和资源基础验证后，再进入 Queue、Task Notification、Mutex 等任务间通信与同步机制。
+完成 M2 文档关闭 checkpoint 并统一 push `feature/m2-freertos-baseline`。确认本地分支、远程 tracking branch 和工作区状态一致后关闭 M2。
+
+下一阶段进入 M3：线程安全、可裁剪的调试基础设施。优先整理 UART 日志接口、日志等级、错误码、调试宏和多任务并发输出策略，不提前进入 ADC、DMA、RS485 或 Modbus。

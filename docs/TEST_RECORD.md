@@ -385,3 +385,150 @@
   - 尚未加入 Queue、Mutex、Semaphore、Task Notification、ADC/DMA 及后续业务任务。
   - 后续创建新的 RTOS 对象后，应重新检查 Current Free Heap 和 Minimum Ever Free Heap。
   - 当前 88.49% 的剩余 Heap 不代表完整系统阶段仍会保持相同余量。
+
+## TEST-20260924-01：FreeRTOS 同优先级时间片调度验证
+
+- 目标：
+  - 验证两个相同优先级、持续处于 Ready 状态且不主动阻塞或 yield 的任务能够持续获得 CPU 执行机会。
+  - 验证当前工程实际启用了 FreeRTOS 抢占式时间片调度。
+  - 同时确认更高优先级任务从 Blocked 恢复为 Ready 后仍能够正常抢占同优先级 Busy Task。
+
+- 配置：
+  - `configUSE_PREEMPTION = 1`，由 `FreeRTOSConfig.h` 显式定义。
+  - `configUSE_TIME_SLICING = 1`，当前 `FreeRTOSConfig.h` 未显式定义，由 FreeRTOS 默认配置提供。
+  - BusyTaskA：
+    - Priority：`osPriorityNormal`
+    - Stack：512 B
+    - 持续执行 `busy_counter_a++`
+    - 不调用 `osDelay()` 或 `osThreadYield()`
+  - BusyTaskB：
+    - Priority：`osPriorityNormal`
+    - Stack：512 B
+    - 持续执行 `busy_counter_b++`
+    - 不调用 `osDelay()` 或 `osThreadYield()`
+  - UARTTask：
+    - Priority：`osPriorityAboveNormal`
+    - Stack：1024 B
+    - 周期读取并输出两个 Busy Task 的计数器
+    - 每轮调用 `osDelay(1000U)`
+
+- 方法：
+  - 使用 `git grep` 核对 `configUSE_PREEMPTION` 和 `configUSE_TIME_SLICING` 的最终有效配置。
+  - 创建两个相同优先级的 Busy Task，使二者始终保持 Ready/Running 竞争状态。
+  - UARTTask 以更高优先级每约 1000 ms 唤醒一次，输出两个计数器后重新进入 Blocked。
+  - 观察两个计数器是否均持续增长。
+  - 连续执行 3 次 NRST，检查调度行为能否稳定重复。
+
+- 实际结果：
+  - Scheduler 启动后的首次串口输出为：
+    ```text
+    busy_counter_a = 0 busy_counter_b = 0
+    ```
+    与 UARTTask 优先级最高、首先获得 CPU 的预期一致。
+  - 后续部分输出：
+    ```text
+    busy_counter_a = 8358950 busy_counter_b = 8366245
+    busy_counter_a = 16717052 busy_counter_b = 16732490
+    busy_counter_a = 25072256 busy_counter_b = 25098735
+    busy_counter_a = 33427487 busy_counter_b = 33464980
+    busy_counter_a = 41782744 busy_counter_b = 41831225
+    busy_counter_a = 50138018 busy_counter_b = 50197470
+    ```
+  - BusyTaskA 和 BusyTaskB 的计数器均持续增长。
+  - 两个计数器数值接近但不要求完全相等。
+  - UARTTask 能够持续周期唤醒并输出数据，说明更高优先级 Ready Task 仍能够正常抢占 BusyTaskA/BusyTaskB。
+  - 连续 3 次 NRST 后均重新从 `0 / 0` 开始，并再次出现两个计数器持续增长的相同行为。
+  - 未观察到 HardFault、任务卡死或某一个 Busy Task 长期得不到执行机会。
+
+- 构建结果：
+  - RAM：20992 B / 128 KB，16.02%
+  - FLASH：24364 B / 1 MB，2.32%
+
+- 结论：
+  - PASS。
+  - 当前工程最终有效配置满足 `configUSE_PREEMPTION = 1` 和 `configUSE_TIME_SLICING = 1`。
+  - 两个相同优先级、持续 Ready 的任务均能够持续获得 CPU 执行机会，实际行为与 FreeRTOS 同优先级时间片调度机制一致。
+  - 更高优先级 UARTTask 从 Blocked 恢复为 Ready 后能够正常抢占两个 Normal 优先级 Busy Task。
+  - 本实验同时进一步验证了同优先级时间片调度和不同优先级抢占行为。
+
+- 边界：
+  - 本实验只证明两个同优先级 Ready Task 均持续获得执行机会，不证明两个任务精确各获得 50% CPU 时间。
+  - 未使用 GPIO、逻辑分析仪或 Trace 工具测量具体时间片长度和上下文切换时刻。
+  - BusyTaskA/BusyTaskB 为调度验证用临时代码，不作为最终 M2 工程基线保留。
+
+## TEST-20260924-02：M2 FreeRTOS 最终基线稳定性验证
+
+- 目标：
+  - 将 M2 调度实验代码恢复为正常周期任务结构。
+  - 验证最终 FreeRTOS baseline 的 HeartBeatTask、UARTTask、Task Stack 和 FreeRTOS Heap 监测能够稳定工作。
+  - 验证最终 baseline 在 NRST 和完全断电重新上电后具有可重复运行能力。
+
+- 配置：
+  - HeartBeatTask：
+    - Priority：`osPriorityNormal`
+    - Stack：512 B
+    - 周期翻转 PB2 USER_LED
+    - 使用 `osDelay(500U)`
+  - UARTTask：
+    - Priority：`osPriorityNormal`
+    - Stack：1024 B
+    - 周期输出 `USART2 TX OK`
+    - 使用 `osDelay(1000U)`
+  - UARTTask 在前几个运行周期后开始周期读取：
+    - `osThreadGetStackSpace()`
+    - `xPortGetFreeHeapSize()`
+    - `xPortGetMinimumEverFreeHeapSize()`
+
+- 方法：
+  - 删除 BusyTaskA、BusyTaskB 和调度实验计数器。
+  - 恢复 HeartBeatTask 正常 PB2 heartbeat。
+  - 将 UARTTask 恢复为 `osPriorityNormal`。
+  - 保留经过验证的 UARTTask 1024 B Stack 配置。
+  - 保留 Task Stack 与 FreeRTOS Heap 运行时监测。
+  - 重新构建、烧录并观察 LED、UART 和资源数据。
+  - 连续执行 3 次 NRST。
+  - 连续执行 3 次完全断电重新上电。
+
+- 实际结果：
+  - PB2 USER_LED heartbeat 持续正常。
+  - USART2 能够持续周期输出 `USART2 TX OK`。
+  - 稳定运行后资源数据为：
+    ```text
+    HeartFree = 384 B
+    UARTFree = 560 B
+    Heap = 13592 B
+    MinHeap = 13592 B
+    ```
+  - HeartBeatTask：
+    - 配置 Stack：512 B
+    - 历史最小剩余：384 B
+    - 历史峰值使用约：128 B
+  - UARTTask：
+    - 配置 Stack：1024 B
+    - 第一次正式资源采样时可观察到约 816 B 剩余
+    - 首次执行后续 `snprintf()` 格式化输出路径后，历史最小剩余更新为 560 B
+    - 后续持续稳定为 560 B
+    - 历史峰值使用约：464 B
+  - `txt_buff` 为 `static` 局部数组，不位于 UARTTask Stack；UARTFree 从 816 B 更新为 560 B 的原因是首次执行 `snprintf()` 等调用路径后产生了更深的历史 Stack 使用，而不是字符串缓冲区从空变为有数据。
+  - Current Free Heap 持续为 13592 B。
+  - Minimum Ever Free Heap 持续为 13592 B。
+  - 连续运行期间未观察到 Heap 持续下降。
+  - NRST ×3 均正常恢复。
+  - Power-cycle ×3 均正常恢复。
+  - 每次完全重新启动后资源观测过程均能重复出现。
+  - 未观察到 HardFault、Hang 或任务异常停止。
+
+- 结论：
+  - PASS。
+  - M2 调度实验代码已成功恢复为正常周期任务 baseline。
+  - HeartBeatTask 与 UARTTask 均能够稳定运行并主动进入 Blocked 状态。
+  - 当前 Task Stack 配置具有充足的 M2 开发余量。
+  - 当前 FreeRTOS Heap 状态稳定。
+  - M2 最终代码基线已经达到可构建、可烧录、可运行、可观测和可重复启动的验收状态。
+  - 最终功能 checkpoint 为 `9c7333b`：`feat: finalize FreeRTOS scheduling baseline`。
+
+- 边界：
+  - 当前 Stack 与 Heap 数据只代表 M2 当前执行路径。
+  - 尚未加入 Queue、Mutex、Task Notification、ADC/DMA、USART RX、RS485、Modbus 等后续功能。
+  - 当前测试不能证明未来完整系统中现有 Stack 和 Heap 配置永久足够。
+  - 后续新增重要任务或 RTOS 对象后必须重新检查 Stack High Water Mark 和 FreeRTOS Heap。

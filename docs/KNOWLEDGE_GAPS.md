@@ -109,32 +109,79 @@ M1 最小裸机工程准备。
 
 ### 来源
 
-M2 FreeRTOS 单任务和双任务调度基线建立过程。
+M2 FreeRTOS 单任务、双任务、优先级抢占、同优先级时间片以及运行时资源验证过程。
 
 ### 当前理解
 
-已经能够区分 Running、Ready、Blocked 和 Idle Task 的基本关系。理解 `osDelay()` 会使当前用户任务进入 Blocked 状态，并允许其他 Ready Task 或 Idle Task 获得 CPU。已经在真实 STM32F407VGT6 上验证一个 HeartbeatTask 和两个同优先级用户任务能够稳定运行。理解 SysTick 当前用于 FreeRTOS Tick，TIM6 用于 HAL Timebase；理解高优先级 Ready Task具有抢占低优先级 Running Task 的条件，同优先级任务可通过时间片、阻塞、唤醒和 yield 等调度点切换。
+已经能够区分 Running、Ready、Blocked 和 Idle Task 的基本关系。理解 `osDelay()` 会使当前用户任务进入 Blocked 状态，并允许其他 Ready Task 或 Idle Task 获得 CPU。
+
+已经在真实 STM32F407VGT6 上分别完成：
+
+- FreeRTOS 单用户任务调度验证。
+- 两个周期任务稳定共存验证。
+- 不同优先级任务抢占验证。
+- 两个同优先级、持续 Ready Task 的时间片调度行为验证。
+- Task Stack High Water Mark 运行时观测。
+- FreeRTOS Current Free Heap 和 Minimum Ever Free Heap 运行时观测。
+
+已确认当前工程：
+
+- `configUSE_PREEMPTION = 1`
+- `configUSE_TIME_SLICING = 1`
+- SysTick 用于 FreeRTOS Kernel Tick。
+- TIM6 用于 HAL Timebase。
+- 高优先级任务从 Blocked 恢复为 Ready 后能够抢占低优先级 Running Task。
+- 两个相同优先级且持续 Ready 的任务在启用时间片后均能持续获得 CPU 执行机会。
+- Task 被切出后保存执行上下文，再次被调度时从原执行位置继续，而不是重新进入任务函数。
+- `osThreadGetStackSpace()` 反映任务运行以来的历史最小剩余 Stack。
+- FreeRTOS Heap 与链接脚本中的传统 C heap 属于不同内存管理概念。
+
+当前 M2 Final Baseline 中：
+
+- HeartBeatTask Stack：512 B，历史最小剩余约 384 B。
+- UARTTask Stack：1024 B，历史最小剩余约 560 B。
+- FreeRTOS Heap：15360 B。
+- Current Free Heap：13592 B。
+- Minimum Ever Free Heap：13592 B。
 
 ### 缺少什么
 
-尚未通过专门实验观察不同优先级任务之间的实际抢占行为；尚未精确理解 PendSV 上下文切换过程和同优先级时间片实现；尚未测量 Task Stack High Water Mark、FreeRTOS heap 当前余量和最小余量。
+M2 当前阶段所需的基础调度和资源观测已经完成。
+
+仍未深入掌握 PendSV 上下文保存/恢复的寄存器级完整实现，也尚未实际处理多个任务之间的数据传递、共享资源竞争和线程安全输出问题。
 
 ### 为什么重要
 
-后续 ADC 采集、通信、数据处理和设备管理都会依赖多个不同优先级任务。如果不能理解调度、阻塞、栈和 heap，就难以判断任务饿死、栈溢出、内存不足和实时性问题。
+后续 ADC 采集、通信、数据处理和设备管理都会依赖多个任务。如果不能正确理解优先级、阻塞、时间片、Stack 和 Heap，就难以判断任务饿死、栈溢出、内存不足和实时性问题。
+
+后续进入 Queue、Task Notification、Mutex 和日志模块后，还需要进一步理解数据所有权、竞争条件和同步策略。
 
 ### 学习优先级
 
-高。属于进入 Queue、Mutex 和正式多任务业务之前的 M2 核心基础。
+当前 M2 基础已完成。
+
+下一优先级转向 M3 的线程安全调试基础设施，以及 M4 的任务间通信与同步机制。
 
 ### 学习任务
 
-设计最小高低优先级任务实验，观察高优先级任务从 Blocked 转为 Ready 后的抢占行为；随后学习并调用 FreeRTOS/CMSIS-RTOS2 可用的栈与 heap 观测接口，记录两个用户任务和内核内存余量。
+M3 中结合多任务日志输出继续学习共享外设资源的线程安全策略。
+
+M4 中通过 Queue、Task Notification、Mutex 和生产者/消费者实验进一步理解任务间通信、所有权和同步。
+
+PendSV 寄存器级上下文切换过程后续按调试需求深化，不作为进入下一里程碑的阻塞条件。
 
 ### 小实验
 
-在当前 `a8e588c` 双任务稳定基线上，只改变任务优先级和可观察行为，不增加 Queue、Mutex 或新的业务模块；验证抢占行为后再测量任务栈和 FreeRTOS heap。
+已完成：
+
+- 单任务 `osDelay()` 阻塞实验。
+- 两个周期任务共存实验。
+- 高低优先级抢占实验。
+- 两个同优先级 Busy Task 时间片实验。
+- Task Stack High Water Mark 实验。
+- FreeRTOS Heap 当前与历史最低余量实验。
+- M2 Final Baseline NRST ×3 和 Power-cycle ×3 验证。
 
 ### 状态
 
-进行中。
+已掌握当前阶段所需基础。

@@ -362,3 +362,114 @@
 ## 明天下一步
 
 继续 M2，不进入 ADC、DMA 或正式通信模块。先通过最小实验验证不同优先级任务之间的抢占行为，并学习和测量 Task Stack 与 FreeRTOS heap 的运行时使用情况；完成这些基础验证后，再进入任务间通信与同步机制。
+
+# 2026-09-24
+
+## 今日计划
+
+- 核对 `feature/m2-freertos-baseline` 当前真实 Git 状态。
+- 完成 FreeRTOS 同优先级时间片调度实验。
+- 将调度实验代码恢复为适合长期保留的 M2 Final Baseline。
+- 完成最终 Task Stack、FreeRTOS Heap、NRST 和断电重启验证。
+- 清理 Git 工作区中的 CRLF/LF 行尾噪音，并建立 M2 最终功能 checkpoint。
+- 开始同步 M2 收尾文档。
+
+## 实际完成
+
+- 确认当前位于 `feature/m2-freertos-baseline`，开发起点为 `51f143c`：`feat: add FreeRTOS runtime resource monitoring`。
+- 确认本地分支与 `origin/feature/m2-freertos-baseline` 同步，开发开始时工作区干净。
+- 使用 `git grep` 确认：
+  - `configUSE_PREEMPTION = 1`
+  - `configUSE_TIME_SLICING = 1`
+- 建立 BusyTaskA 和 BusyTaskB，两个任务均使用 `osPriorityNormal`，不调用 `osDelay()` 或 yield，持续递增各自计数器。
+- UARTTask 使用 `osPriorityAboveNormal`，每约 1000 ms 唤醒并打印两个 Busy Task 计数器。
+- 实物确认 BusyTaskA 和 BusyTaskB 计数器均持续增长，完成同优先级时间片调度行为验证。
+- 连续执行 3 次 NRST，同优先级调度实验均能重复正常运行。
+- 完成后删除 BusyTaskA/BusyTaskB 实验结构，恢复正常 HeartBeatTask + UARTTask baseline。
+- HeartBeatTask 使用 `osPriorityNormal`、512 B Stack 和 `osDelay(500U)`。
+- UARTTask 使用 `osPriorityNormal`、1024 B Stack 和 `osDelay(1000U)`。
+- 保留 Task Stack 和 FreeRTOS Heap 运行时监测。
+- 最终 baseline 实测：
+  - HeartBeatTask 历史最小剩余 Stack：384 B。
+  - UARTTask 历史最小剩余 Stack：560 B。
+  - FreeRTOS Current Free Heap：13592 B。
+  - FreeRTOS Minimum Ever Free Heap：13592 B。
+- 观察到 UARTTask 首次 Stack 采样约为 816 B，首次执行后续 `snprintf()` 调用路径后 High Water Mark 更新为 560 B，并持续稳定。
+- 确认 `static char txt_buff[96]` 不位于任务 Stack，因此 816 B → 560 B 的变化来源于实际函数调用路径产生的更深历史 Stack 使用，而不是缓冲区内容变化。
+- 最终 baseline 完成 NRST ×3 和完全断电重新上电 ×3，均正常恢复。
+- 处理 CubeMX/编辑器导致的大量 CRLF/LF 工作区差异。
+- 使用 `.gitattributes`、`git diff --ignore-cr-at-eol` 和逐文件检查确认大量修改仅属于 EOL 差异。
+- 清理 FreeRTOS Middleware 和 HAL/CubeMX 生成文件中的 EOL-only 工作区噪音。
+- 最终真实功能修改范围缩小为：
+  - `STM32F407_Industrial_Platform.ioc`
+  - `Src/freertos.c`
+- `git diff --cached --check` 通过。
+- 创建提交 `9c7333b`：`feat: finalize FreeRTOS scheduling baseline`。
+- 提交后工作区 clean，本地功能分支领先远程 1 个 commit，等待 M2 文档收尾后统一 push。
+
+## 验收情况
+
+- `configUSE_PREEMPTION` 配置确认：通过。
+- `configUSE_TIME_SLICING` 最终有效值确认：通过。
+- 同优先级持续 Ready Task 时间片调度行为：通过。
+- 高优先级 UARTTask 抢占行为：通过。
+- M2 最终 HeartBeatTask 周期运行：通过。
+- M2 最终 UARTTask 周期运行：通过。
+- HeartBeatTask Stack 运行时余量：通过，历史最小剩余 384 B。
+- UARTTask Stack 运行时余量：通过，历史最小剩余 560 B。
+- FreeRTOS Current Free Heap：13592 B，稳定。
+- FreeRTOS Minimum Ever Free Heap：13592 B，稳定。
+- NRST ×3：通过。
+- 完全断电重新上电 ×3：通过。
+- M2 最终功能 checkpoint：已创建。
+- M2 文档同步和最终远程 push：正在进行。
+
+## 未完成
+
+- 完成 M2 最终项目状态、会话交接、路线图和 README 同步。
+- 创建 M2 文档关闭 checkpoint。
+- 将最终 M2 功能与文档提交统一 push 到远程。
+- Queue、Task Notification、Mutex 等任务间通信与同步留待后续里程碑。
+- USART2 RX 尚未进行真实板级验证。
+- 尚未进入 ADC、DMA、RS485 或 Modbus 功能阶段。
+
+## 今日 Bug
+
+- 无需要归档到 `ERROR_LOG.md` 的固件 Bug。
+- CubeMX/编辑器重新保存工程后，大量 C/H/FreeRTOS 文件在 Git 中显示为 Modified；通过 `git diff --ignore-cr-at-eol` 确认其中绝大多数仅为 CRLF/LF 行尾差异，没有实际代码变化。
+- 清理 EOL-only 文件后，最终真实功能修改仅保留 `.ioc` 和 `Src/freertos.c`，避免将无关格式变化写入 Git 历史。
+
+## 今日学习
+
+- `configUSE_TIME_SLICING` 即使没有在 `FreeRTOSConfig.h` 显式定义，也可能由 FreeRTOS 默认配置提供最终有效值，判断配置时需要继续追踪预处理定义。
+- 相同优先级、持续 Ready 且不主动阻塞的任务可以在启用时间片时轮流获得 CPU。
+- 不同优先级之间的抢占和同优先级之间的时间片调度是两个不同机制。
+- FreeRTOS Ready List 不是每次高优先级任务阻塞后都从固定“表头任务”重新开始，调度器会维护同优先级任务的轮换状态。
+- Task 被抢占后保存上下文，重新被调度时从保存的执行上下文继续运行，而不是重新执行任务入口。
+- `osThreadGetStackSpace()` 反映的是任务历史最小剩余 Stack，而不是简单的瞬时空闲 Stack。
+- `static` 局部数组具有静态存储期，不位于任务 Stack。
+- `snprintf()` 的目标 buffer 若为 64 B，作为 C 字符串最多保存 63 个有效字符和一个 `'\0'`。
+- `HAL_UART_Transmit()` 按指针和长度发送数据，本身不依赖 C 字符串结尾的 `'\0'`。
+- `.gitattributes` 和工作区实际 EOL 不一致时可能造成大量无意义 Modified 状态；提交前应区分实际内容变化与 EOL-only 差异。
+- `git diff --check` 只检查空白错误，不能判断大量 Modified 文件是否属于合理提交边界。
+- 一个高质量 Git checkpoint 不只要求代码正确，还要求提交边界干净、可解释。
+
+## 尚未理解
+
+- PendSV 保存和恢复任务上下文的寄存器级完整过程仍可在后续按需深化。
+- 尚未实际使用 Queue、Task Notification、Mutex 等并发通信与同步机制。
+- 尚未处理多个任务并发访问同一个日志输出资源的问题。
+- USART2 RX 尚未进行实际板级验证。
+
+## Git
+
+- Branch：`feature/m2-freertos-baseline`
+- 开发起点：`51f143c`，`feat: add FreeRTOS runtime resource monitoring`
+- M2 Final Baseline：`9c7333b`，`feat: finalize FreeRTOS scheduling baseline`
+- Remote：`origin/feature/m2-freertos-baseline`
+- 当前功能提交尚未 push，等待文档收尾后统一同步。
+- 功能提交完成后 Working Tree：clean。
+
+## 明天下一步
+
+完成 M2 最终文档同步并创建 `docs: close M2 and prepare M3 handoff` checkpoint，统一 push `feature/m2-freertos-baseline`。确认本地与远程同步、工作区干净后关闭 M2；下一阶段进入 M3，只建立线程安全、可裁剪的调试基础设施，不提前进入 ADC、DMA、RS485 或 Modbus。
