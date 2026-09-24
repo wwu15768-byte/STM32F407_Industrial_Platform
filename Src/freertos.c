@@ -27,6 +27,7 @@
 /* USER CODE BEGIN Includes */
 #include "usart.h"
 #include <stdint.h>
+#include <stddef.h>
 #include <stdio.h>
 /* USER CODE END Includes */
 
@@ -47,12 +48,12 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-volatile uint32_t low_counter = 0;
+
 /* USER CODE END Variables */
-/* Definitions for HeartbeatTask */
-osThreadId_t HeartbeatTaskHandle;
-const osThreadAttr_t HeartbeatTask_attributes = {
-  .name = "HeartbeatTask",
+/* Definitions for HeartBeatTask */
+osThreadId_t HeartBeatTaskHandle;
+const osThreadAttr_t HeartBeatTask_attributes = {
+  .name = "HeartBeatTask",
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
@@ -61,7 +62,7 @@ osThreadId_t UARTTaskHandle;
 const osThreadAttr_t UARTTask_attributes = {
   .name = "UARTTask",
   .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityAboveNormal,
+  .priority = (osPriority_t) osPriorityNormal,
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -69,7 +70,7 @@ const osThreadAttr_t UARTTask_attributes = {
 
 /* USER CODE END FunctionPrototypes */
 
-void StartHeartbeatTask(void *argument);
+void StartHeartBeatTask(void *argument);
 void StartUARTTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
@@ -101,8 +102,8 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
-  /* creation of HeartbeatTask */
-  HeartbeatTaskHandle = osThreadNew(StartHeartbeatTask, NULL, &HeartbeatTask_attributes);
+  /* creation of HeartBeatTask */
+  HeartBeatTaskHandle = osThreadNew(StartHeartBeatTask, NULL, &HeartBeatTask_attributes);
 
   /* creation of UARTTask */
   UARTTaskHandle = osThreadNew(StartUARTTask, NULL, &UARTTask_attributes);
@@ -117,22 +118,23 @@ void MX_FREERTOS_Init(void) {
 
 }
 
-/* USER CODE BEGIN Header_StartHeartbeatTask */
+/* USER CODE BEGIN Header_StartHeartBeatTask */
 /**
-  * @brief  Function implementing the HeartbeatTask thread.
+  * @brief  Function implementing the HeartBeatTask thread.
   * @param  argument: Not used
   * @retval None
   */
-/* USER CODE END Header_StartHeartbeatTask */
-void StartHeartbeatTask(void *argument)
+/* USER CODE END Header_StartHeartBeatTask */
+void StartHeartBeatTask(void *argument)
 {
-  /* USER CODE BEGIN StartHeartbeatTask */
+  /* USER CODE BEGIN StartHeartBeatTask */
   /* Infinite loop */
   for(;;)
   {
-    low_counter++;
+    HAL_GPIO_TogglePin(GPIOB, USER_LED_Pin);
+    osDelay(500U);
   }
-  /* USER CODE END StartHeartbeatTask */
+  /* USER CODE END StartHeartBeatTask */
 }
 
 /* USER CODE BEGIN Header_StartUARTTask */
@@ -145,16 +147,12 @@ void StartHeartbeatTask(void *argument)
 void StartUARTTask(void *argument)
 {
   /* USER CODE BEGIN StartUARTTask */
-  static const uint8_t usart2_test_message[] = "USART2 TX OK  ";
+  static const uint8_t usart2_test_message[] = "USART2 TX OK\r\n";
   static char txt_buff[96];
   static uint32_t stack_sample_count = 0U;
   /* Infinite loop */
   for(;;)
   {
-    int len = sniprintf(txt_buff,
-                      sizeof(txt_buff),
-                      "low_counter = %lu\r\n", /*当low_counter = 123，最终输出"low_counter = 123\r\n"*/
-                      (unsigned long)low_counter);
     if( HAL_UART_Transmit(&huart2,
                           usart2_test_message,
                           (uint16_t)(sizeof(usart2_test_message) - 1U),  /*去掉 C 字符串末尾的 '\0'*/
@@ -162,20 +160,11 @@ void StartUARTTask(void *argument)
     {
       Error_Handler();
     }
-    if(len > 0)
-    {
-      if( HAL_UART_Transmit(&huart2,
-                            (uint8_t *)txt_buff,
-                            (uint16_t)len,  /*去掉 C 字符串末尾的 '\0'*/
-                            100U) != HAL_OK )
-      {
-        Error_Handler();
-      }
-    }
-
-    HAL_GPIO_TogglePin(GPIOB, USER_LED_Pin);
-
-    stack_sample_count ++; /*在 StartUARTTask 执行一段时间后开始检测剩余栈，以防任务未开始导致测量不准*/
+    /*
+    在 StartUARTTask 执行一段时间后开始检测剩余栈，
+    跳过前几个周期，使任务先运行一段时间后再开始记录栈余量。
+    */
+    stack_sample_count ++;
 
     if(stack_sample_count >= 5U)
     {
@@ -183,22 +172,32 @@ void StartUARTTask(void *argument)
       uint32_t uart_stack_free;
       size_t heap_free;
       size_t heap_min_free;
-      heartbeat_stack_free = osThreadGetStackSpace(HeartbeatTaskHandle);
+      heartbeat_stack_free = osThreadGetStackSpace(HeartBeatTaskHandle);
       uart_stack_free = osThreadGetStackSpace(UARTTaskHandle);
       heap_free = xPortGetFreeHeapSize();
       heap_min_free = xPortGetMinimumEverFreeHeapSize();
-      len = sniprintf(txt_buff,
+      int len = snprintf(txt_buff,
                       sizeof(txt_buff),
-                      "HearFree = %lu B  UARTFree = %lu B Heap=%lu B MinHeap=%lu B\r\n",
+                      "HeartFree = %lu B  UARTFree = %lu B Heap=%lu B MinHeap=%lu B\r\n",
                       (unsigned long)heartbeat_stack_free,
                       (unsigned long)uart_stack_free,
                       (unsigned long)heap_free,
                       (unsigned long)heap_min_free);
       if(len > 0)
       {
+        uint16_t tx_len;
+
+        if ((size_t)len >= sizeof(txt_buff))
+        {
+            tx_len = (uint16_t)(sizeof(txt_buff) - 1U);
+        }
+        else
+        {
+            tx_len = (uint16_t)len;
+        }
         if( HAL_UART_Transmit(&huart2,
                               (uint8_t *)txt_buff,
-                              (uint16_t)len,  /*去掉 C 字符串末尾的 '\0'*/
+                              tx_len,  /*去掉 C 字符串末尾的 '\0'*/
                               100U) != HAL_OK )
         {
           Error_Handler();
