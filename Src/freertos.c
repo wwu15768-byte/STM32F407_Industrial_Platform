@@ -26,6 +26,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "usart.h"
+#include "debug_log.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -87,6 +88,10 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
+  if (DebugLog_Init(&huart2) != DEBUG_LOG_OK)
+  {
+      Error_Handler();
+  }
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
