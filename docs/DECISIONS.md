@@ -52,3 +52,17 @@
 - 原因：以上配置已经通过开发板原理图、引脚分配图、厂商资料、MCU 数据手册和实物信息交叉核对。
 - 影响：原先文档中的 STM32F407ZGT6 假设被本决策替代；CubeMX 必须选择 STM32F407VGT6，不得沿用 LQFP-144 器件配置。
 - 供电约束：外部 12 V 必须先降压为稳定 5 V 后接入板端 5 V，设备共地，不同时由 USB 或 ST-LINK 供电。
+
+## DEC-20260920-01：FreeRTOS 与 HAL 使用独立系统时基
+
+- 状态：已接受
+- 决策：进入 M2 后，将 STM32 HAL Timebase 从 SysTick 迁移到 TIM6；SysTick 专门用于 FreeRTOS Kernel Tick。
+- 原因：FreeRTOS 需要 SysTick 支持任务延时、超时和调度时间基准；将 HAL 1 ms Tick 独立到 TIM6，可以避免 HAL 时基与 RTOS Tick 职责混杂，并保持 HAL 超时与时间函数正常工作。
+- 影响：后续必须保留 TIM6 作为 HAL Timebase，不能将其随意分配给普通业务功能；SysTick、PendSV 和 SVC 的实现应以 FreeRTOS/CMSIS-RTOS2 port 为准，不手工重复定义。
+
+## DEC-20260920-02：M2 采用 CMSIS-RTOS2 并分阶段建立调度基线
+
+- 状态：已接受
+- 决策：FreeRTOS 应用层接口使用 CMSIS-RTOS2；M2 按“单任务验证 → 双任务验证 → 优先级与资源验证 → 通信与同步”的顺序推进。
+- 原因：分阶段引入功能可以控制变量数量，使每个 Git checkpoint 都对应一个经过真实硬件验证的工程状态；CMSIS-RTOS2 与当前 CubeMX 生成方式一致，并提供统一的任务管理接口。
+- 影响：在完成基础调度、优先级、Task Stack 和 heap 验证前，不提前引入 Queue、Mutex、DMA、ADC、RS485 或 Modbus 等功能。

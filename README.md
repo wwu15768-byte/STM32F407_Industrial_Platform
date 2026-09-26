@@ -2,7 +2,7 @@
 
 本项目以 STM32F407VGT6 为核心，逐步实现一个基于 FreeRTOS 的工业实时数据采集与设备管理平台，同时将项目作为嵌入式软件工程实践载体，训练驱动开发、RTOS、通信、测试、调试、Git 和工程文档能力。本仓库采用 STM32 HAL、CMake、Ninja 和 Arm GNU Toolchain (arm-none-eabi)，逐步建立可复现、可验证、便于维护的固件工程。
 
-当前处于 **M1：STM32 裸机稳定基线阶段**。硬件配置输入已经确认，尚未生成 STM32 工程，也不包含正式业务功能。
+当前已完成 **M2：FreeRTOS 最小系统与调度基础**，正在准备进入 **M3：线程安全、可裁剪的调试基础设施**。当前工程已经具备可重复构建、烧录和真实目标板运行能力，并完成 FreeRTOS 单任务、双任务、优先级抢占、同优先级时间片、Task Stack、FreeRTOS Heap、NRST 和完全断电重新上电验证。
 
 ## 硬件与软件约束
 
@@ -18,7 +18,7 @@
 - 语言标准：C99/C11，兼顾嵌入式内存限制和字节对齐。
 - 实现原则：保持简单、模块低耦合、检查 HAL 返回值、ISR 短小且不执行阻塞操作。
 - 硬件配置：引脚、外设复用和时钟树必须在信息明确后配置，不预设开发板连接。
-- RTOS：FreeRTOS；在基础裸机工程验证通过后引入。
+- RTOS：FreeRTOS，应用层接口采用 CMSIS-RTOS2；HAL Timebase 使用 TIM6，SysTick 用于 FreeRTOS Kernel Tick。
 
 ## 开发工具链
 
@@ -35,7 +35,7 @@
 | ST-LINK GDB Server | 调试接口 | 随 CubeCLT 提供 |
 | Git | 版本控制 | 2.54.0 |
 
-计划中的构建与烧录流程：
+当前已验证的构建与烧录流程：
 
 ```text
 STM32CubeMX
@@ -57,27 +57,56 @@ STM32F407VGT6
 
 ```text
 STM32F407_Industrial_Platform/
-├── .gitignore       # Git 忽略规则
-├── AGENTS.md        # 项目约束和参考资料
-├── README.md        # 项目入口文档
-└── docs/            # 项目管理与过程记录
+├── Inc/                         # 应用和生成头文件
+├── Src/                         # 应用和生成源码
+├── Drivers/                     # STM32 HAL / CMSIS
+├── Middlewares/                 # FreeRTOS 与 CMSIS-RTOS2
+├── cmake/                       # CubeMX/CMake 构建配置
+├── docs/                        # 项目管理、测试和开发记录
+├── .gitattributes               # 文本行尾规范
+├── .gitignore                   # Git 忽略规则
+├── CMakeLists.txt               # CMake 工程入口
+├── CMakePresets.json            # 构建 preset
+├── STM32F407_Industrial_Platform.ioc
+├── STM32F407xx_FLASH.ld
+├── startup_stm32f407xx.s
+├── AGENTS.md
+└── README.md
 ```
 
-CubeMX 生成的 `Core/`、`Drivers/`、启动文件、链接脚本、`.ioc` 和 CMake 配置将在后续里程碑加入版本控制；构建目录和二进制产物不会提交。
+CubeMX 工程输入、HAL/CMSIS、FreeRTOS、启动文件、链接脚本、`.ioc` 和 CMake 配置均已纳入版本控制；`build/`、`.elf`、`.hex`、`.bin` 等可重新生成的构建产物继续由 `.gitignore` 排除。
 
-## M0 进度
+## 里程碑进度
 
-- [x] 确认仓库根目录。
-- [x] 确认开发工具链。
-- [x] 初始化 Git 仓库并统一默认分支为 `main`。
-- [x] 建立 `.gitignore`。
-- [x] 完成 README 与 docs 项目管理体系。
-- [x] 由本次提交建立第一次稳定基线。
-- [x] 建立私有远程仓库并验证首次推送。
+- [x] M0：建立开发环境、项目管理体系和稳定 Git 基线。
+- [x] M1：建立可下载、可运行、可观测、可重复启动的 STM32F407VGT6 裸机 Known Good Baseline。
+- [x] M2：完成 FreeRTOS 最小系统、CMSIS-RTOS2、单任务、双任务、优先级抢占、同优先级时间片、Task Stack 和 FreeRTOS Heap 验证。
+- [ ] M3：建立线程安全、可裁剪的调试基础设施。
+- [ ] M4：建立任务间通信、同步和数据缓冲基础。
 
 ## 当前构建状态
 
-硬件基线已确认，目前仍没有可编译目标。下一步使用 STM32CubeMX 为 STM32F407VGT6 生成最小 HAL 工程，再建立并验证 CMake 配置。
+## 当前构建状态
+
+当前 M2 Final Baseline 已通过 CMake + Ninja + GNU Arm GCC 构建，并成功生成 ELF/HEX/BIN 固件。
+
+最近一次最终 baseline 构建资源占用：
+
+- RAM：20992 B / 128 KB，16.02%
+- FLASH：24364 B / 1 MB，2.32%
+
+当前真实板级 baseline：
+
+- HeartBeatTask：`osPriorityNormal`，512 B Stack，`osDelay(500U)`。
+- UARTTask：`osPriorityNormal`，1024 B Stack，`osDelay(1000U)`。
+- HeartBeatTask 历史最小剩余 Stack：约 384 B。
+- UARTTask 历史最小剩余 Stack：约 560 B。
+- FreeRTOS Current Free Heap：13592 B。
+- FreeRTOS Minimum Ever Free Heap：13592 B。
+- NRST ×3：通过。
+- 完全断电重新上电 ×3：通过。
+
+M2 最终功能 checkpoint 为 `9c7333b`：`feat: finalize FreeRTOS scheduling baseline`。
 
 ## 文档
 
