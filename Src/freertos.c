@@ -152,19 +152,11 @@ void StartHeartBeatTask(void *argument)
 void StartUARTTask(void *argument)
 {
   /* USER CODE BEGIN StartUARTTask */
-  static const uint8_t usart2_test_message[] = "USART2 TX OK\r\n";
-  static char txt_buff[96];
   static uint32_t stack_sample_count = 0U;
   /* Infinite loop */
   for(;;)
   {
-    if( HAL_UART_Transmit(&huart2,
-                          usart2_test_message,
-                          (uint16_t)(sizeof(usart2_test_message) - 1U),  /*去掉 C 字符串末尾的 '\0'*/
-                          100U) != HAL_OK )
-    {
-      Error_Handler();
-    }
+    LOG_INFO("UART", "USART2 TX OK");
     /*
     在 StartUARTTask 执行一段时间后开始检测剩余栈，
     跳过前几个周期，使任务先运行一段时间后再开始记录栈余量。
@@ -181,33 +173,13 @@ void StartUARTTask(void *argument)
       uart_stack_free = osThreadGetStackSpace(UARTTaskHandle);
       heap_free = xPortGetFreeHeapSize();
       heap_min_free = xPortGetMinimumEverFreeHeapSize();
-      int len = snprintf(txt_buff,
-                      sizeof(txt_buff),
-                      "HeartFree = %lu B  UARTFree = %lu B Heap=%lu B MinHeap=%lu B\r\n",
-                      (unsigned long)heartbeat_stack_free,
-                      (unsigned long)uart_stack_free,
-                      (unsigned long)heap_free,
-                      (unsigned long)heap_min_free);
-      if(len > 0)
-      {
-        uint16_t tx_len;
 
-        if ((size_t)len >= sizeof(txt_buff))
-        {
-            tx_len = (uint16_t)(sizeof(txt_buff) - 1U);
-        }
-        else
-        {
-            tx_len = (uint16_t)len;
-        }
-        if( HAL_UART_Transmit(&huart2,
-                              (uint8_t *)txt_buff,
-                              tx_len,  /*去掉 C 字符串末尾的 '\0'*/
-                              100U) != HAL_OK )
-        {
-          Error_Handler();
-        }
-      }
+      LOG_INFO( "SYS",
+                "HeartFree = %lu B  UARTFree = %lu B Heap = %lu B MinHeap = %lu B",
+                (unsigned long)heartbeat_stack_free,
+                (unsigned long)uart_stack_free,
+                (unsigned long)heap_free,
+                (unsigned long)heap_min_free);
     }
     osDelay(1000U);
   }

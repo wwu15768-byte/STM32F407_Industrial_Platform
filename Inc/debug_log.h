@@ -130,7 +130,14 @@ DebugLogStatus_t DebugLog_Write(DebugLogLevel_t level,
 
 #endif
 
-# endif
+#else
+
+#define LOG_DEBUG(tag, format, ...)  ((void)0)
+#define LOG_INFO(tag, format, ...)   ((void)0)
+#define LOG_WARN(tag, format, ...)   ((void)0)
+#define LOG_ERROR(tag, format, ...)  ((void)0)
+
+#endif
 
 #ifdef __cplusplus
 }
