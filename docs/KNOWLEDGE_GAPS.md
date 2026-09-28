@@ -185,3 +185,101 @@ PendSV 寄存器级上下文切换过程后续按调试需求深化，不作为�
 ### 状态
 
 已掌握当前阶段所需基础。
+
+## KG-005：线程安全日志、共享资源与编译期裁剪
+
+### 来源
+
+M3 统一 UART 调试日志、日志等级、编译期裁剪和双任务并发输出验证过程。
+
+### 当前理解
+
+已经能够识别多任务日志中的两个共享资源：
+
+- USART2 外设。
+- 静态共享日志 buffer。
+
+理解 Mutex 不应只保护最终 HAL_UART_Transmit()，而应保护“共享 buffer 格式化 + UART 发送”的完整事务，否则一个任务可能在另一个任务发送前覆盖共享 buffer。
+
+已经通过真实 STM32F407VGT6 完成两个 osPriorityNormal Task、约 10 ms 周期长日志并发压力实验；当前实验条件下未观察到半行交叉、payload 混合、乱码、Hang 或 HardFault。
+
+已经理解：
+
+- osMutexAcquire() timeout 使用 Kernel Tick 语义。
+- Mutex 保证共享资源互斥，不保证任务按照固定顺序执行。
+- 静态日志 buffer 不占用某一个 Task 的 Stack。
+- snprintf() / vsnprintf() 等格式化调用仍会增加调用任务的历史峰值 Stack 使用。
+- CMSIS-RTOS2 Mutex 会消耗 FreeRTOS Heap。
+- C 预处理器不能直接使用 enum 完成 #if 日志等级判断，因此需要独立预处理数值宏。
+- DEBUG_LOG_ENABLE 和 DEBUG_LOG_LEVEL 可以在编译阶段裁剪日志调用路径。
+- 链接器会移除没有真实调用者的 section，因此日志资源成本应在真实业务调用存在后测量。
+
+当前 M3 Final Baseline 已实测：
+
+- HeartBeatTask 历史最小剩余 Stack：384 B。
+- UARTTask 历史最小剩余 Stack：512 B。
+- FreeRTOS Current Free Heap：13504 B。
+- FreeRTOS Minimum Ever Free Heap：13504 B。
+
+完整日志开启与关闭的构建差值约为：
+
+- Flash：6108 B。
+- 静态 RAM：544 B。
+- 相比 M2，UARTTask 历史峰值 Stack 使用增加约 48 B。
+- 相比 M2，FreeRTOS Heap 额外消耗约 88 B。
+
+### 缺少什么
+
+尚未掌握和验证：
+
+- ISR-safe 日志设计。
+- 异步 LogTask 和日志 Queue。
+- UART DMA 日志发送。
+- 日志高负载下的背压、丢弃和流量控制策略。
+- Mutex 优先级继承和优先级反转的实际场景。
+- 使用 linker Map 文件精确拆分 vsnprintf()、libc 和日志模块各自的 Flash / RAM 成本。
+- 多个共享资源同时存在时的锁顺序和死锁规避。
+
+### 为什么重要
+
+后续 ADC 采集、通信协议、数据处理和设备管理会进一步增加任务数量与共享资源。如果不能正确处理资源所有权、临界区和阻塞行为，可能出现日志交叉、数据破坏、任务阻塞、优先级反转甚至死锁。
+
+同时，嵌入式日志的格式化和同步机制会消耗 Flash、RAM、Task Stack 和 FreeRTOS Heap，需要在可观测性和资源成本之间进行工程取舍。
+
+### 学习优先级
+
+当前 M3 所需的同步 UART 日志基础已经掌握。
+
+下一阶段优先进入 M4，通过 Queue、Task Notification、Ring Buffer 和生产者/消费者模型进一步学习任务间通信、数据所有权和同步。
+
+ISR-safe 和异步日志在实际业务需求出现后再深化，不作为当前进入 M4 的阻塞条件。
+
+### 学习任务
+
+M4 中实际建立 Queue 数据传递实验。
+
+对比 Queue、Task Notification 和 Mutex 的适用场景。
+
+学习 Ring Buffer 的读写索引、容量、满/空判断和所有权。
+
+建立生产者/消费者实验并观察任务阻塞和唤醒行为。
+
+后续固件体积明显增长时使用 Map 文件分析日志格式化依赖。
+
+出现 ISR 日志需求时单独设计 deferred logging，而不直接在 ISR 中调用当前 LOG_xxx()。
+
+### 小实验
+
+已完成：
+
+- DEBUG_LOG_ENABLE = 1 / 0 clean build 对比。
+- DEBUG / INFO / WARN / ERROR 四级过滤实板验证。
+- 两个同优先级 Task 约 10 ms 高频长日志并发压力实验。
+- Mutex 保护共享静态 buffer 和 USART2 输出实验。
+- M3 Task Stack 与 FreeRTOS Heap 重新测量。
+- M3 Final Baseline NRST ×3。
+- M3 Final Baseline Power-cycle ×3。
+
+### 状态
+
+已掌握当前 M3 阶段所需基础。

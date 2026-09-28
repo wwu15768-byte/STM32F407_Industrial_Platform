@@ -66,3 +66,22 @@
 - 决策：FreeRTOS 应用层接口使用 CMSIS-RTOS2；M2 按“单任务验证 → 双任务验证 → 优先级与资源验证 → 通信与同步”的顺序推进。
 - 原因：分阶段引入功能可以控制变量数量，使每个 Git checkpoint 都对应一个经过真实硬件验证的工程状态；CMSIS-RTOS2 与当前 CubeMX 生成方式一致，并提供统一的任务管理接口。
 - 影响：在完成基础调度、优先级、Task Stack 和 heap 验证前，不提前引入 Queue、Mutex、DMA、ADC、RS485 或 Modbus 等功能。
+
+## DEC-20260927-01：M3 采用统一同步 UART 日志模块和 Mutex 保护策略
+
+- 状态：已接受
+- 决策：
+    - 应用 Task 的调试输出统一通过 debug_log 模块和 LOG_DEBUG / LOG_INFO / LOG_WARN / LOG_ERROR 接口。
+    - 日志模块通过初始化参数获取 UART Handle，使用静态共享日志 buffer，并使用 CMSIS-RTOS2 Mutex 保护“日志格式化 + UART 阻塞发送”的完整事务。
+    - 日志全局开关和等级过滤采用编译期预处理裁剪。
+    - M3 暂不引入独立 LogTask、Queue、DMA 或异步日志。
+- 原因：
+    - 多个 Task 直接调用同一个 UART 和共享格式化资源会产生共享资源竞争。
+    - 统一日志入口可以隔离业务任务与底层 UART 实现，同时便于统一日志等级、错误处理、资源裁剪和后续替换输出后端。
+    - M3 保持同步阻塞实现可以控制变量数量，在进入更复杂任务间通信和异步机制前先建立可验证的稳定基础。
+- 影响：
+    - 后续业务 Task 不应为了普通调试输出继续散落直接调用 HAL_UART_Transmit()。
+    - 当前日志模块负责 UART 调试输出的格式化和互斥访问。
+    - 当前 LOG_xxx() 仅用于正常 Task / Thread context，不作为 ISR-safe API。
+    - 后续若引入异步 LogTask、Queue、UART DMA 或其他日志后端，应建立新的设计决策并说明对本决策的扩展或替代关系。
+    - 新增重要日志调用路径后仍需重新检查 Task Stack、FreeRTOS Heap、Flash 和静态 RAM 成本。
