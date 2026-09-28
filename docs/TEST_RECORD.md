@@ -532,3 +532,238 @@
   - 尚未加入 Queue、Mutex、Task Notification、ADC/DMA、USART RX、RS485、Modbus 等后续功能。
   - 当前测试不能证明未来完整系统中现有 Stack 和 Heap 配置永久足够。
   - 后续新增重要任务或 RTOS 对象后必须重新检查 Stack High Water Mark 和 FreeRTOS Heap。
+
+## TEST-20260927-01：M3 调试日志基础设施与编译期全局裁剪验证
+
+- 目标：
+  - 建立统一的 UART 调试日志模块。
+  - 验证 DEBUG_LOG_ENABLE 能够在编译期关闭日志调用和相关实现。
+  - 测量完整日志调用链启用与关闭时的 Flash 和静态 RAM 差异。
+
+- 配置：
+  - 日志后端：USART2。
+  - UART Handle 通过 DebugLog_Init(&huart2) 注入。
+  - 日志缓冲区：128 B 静态共享 buffer。
+  - 线程安全：CMSIS-RTOS2 Mutex。
+  - UART 阻塞发送 timeout：100 ms。
+  - Mutex timeout：100 Kernel Ticks。
+  - 默认日志等级：INFO。
+  - FreeRTOS 业务日志通过 LOG_INFO() 统一调用。
+
+- 方法：
+  - 建立 debug_log.h / debug_log.c。
+  - 将日志模块加入 CMake 构建。
+  - 将 UARTTask 中的直接 HAL_UART_Transmit() 和 snprintf() 日志路径迁移到 LOG_INFO()。
+  - 使用 cmake --build --preset Debug --clean-first 分别构建：
+    - DEBUG_LOG_ENABLE = 1
+    - DEBUG_LOG_ENABLE = 0
+  - 比较 linker size 输出。
+
+- 实际结果：
+  - DEBUG_LOG_ENABLE = 1：
+    - RAM：21056 B / 128 KB，16.06%。
+    - FLASH：27424 B / 1 MB，2.62%。
+    - text：27320 B。
+    - data：96 B。
+    - bss：20960 B。
+  - DEBUG_LOG_ENABLE = 0：
+    - RAM：20512 B / 128 KB，15.65%。
+    - FLASH：21316 B / 1 MB，2.03%。
+    - text：21292 B。
+    - data：16 B。
+    - bss：20496 B。
+  - 差值：
+    - FLASH：6108 B。
+    - text：6028 B。
+    - data：80 B。
+    - bss：464 B。
+    - 总静态 RAM：544 B。
+
+- 结论：
+  - PASS。
+  - DEBUG_LOG_ENABLE 能够控制完整日志调用链是否进入最终固件。
+  - 当前完整同步 UART 格式化日志在实际业务调用存在时产生约 6108 B Flash 和 544 B 静态 RAM 构建差值。
+  - 日志关闭后 FreeRTOS 业务代码不需要恢复原始直接 UART 输出路径。
+
+- 边界：
+  - 6108 B Flash 和 544 B RAM 是当前整个链接结果的实测差值，不能简单全部归因于 debug_log.c 本身。
+  - vsnprintf() / snprintf() 及其 libc 依赖会影响最终 Flash 和静态资源。
+  - 当前没有进一步使用 Map 文件拆分各依赖的精确占用。
+  - 本测试不包含运行时 FreeRTOS Heap 和 Task Stack 成本，该部分在后续测试中单独记录。
+
+## TEST-20260927-02：M3 日志等级编译期过滤验证
+
+- 目标：
+  - 验证 DEBUG、INFO、WARN、ERROR 四级日志能够根据 DEBUG_LOG_LEVEL 在编译期正确过滤。
+  - 验证业务 INFO 日志在 WARN / ERROR 等级下同样能够被统一裁剪。
+
+- 配置：
+  - 临时在 UARTTask 中各调用一次：
+    - LOG_DEBUG("TEST", ...)
+    - LOG_INFO("TEST", ...)
+    - LOG_WARN("TEST", ...)
+    - LOG_ERROR("TEST", ...)
+  - 每轮修改 DEBUG_LOG_LEVEL 后均执行 clean build、烧录并观察实际 USART2 输出。
+
+- 方法：
+- 分别构建如下宏，烧录并检查各级输出。
+  - DEBUG_LOG_LEVEL_VALUE_DEBUG
+  - DEBUG_LOG_LEVEL_VALUE_INFO
+  - DEBUG_LOG_LEVEL_VALUE_WARN
+  - DEBUG_LOG_LEVEL_VALUE_ERROR
+
+
+- 实际结果：
+  - DEBUG：
+    - [D][TEST] DEBUG level message
+    - [I][TEST] INFO level message
+    - [W][TEST] WARN level message
+    - [E][TEST] ERROR level message
+  - INFO：
+    - [I][TEST] INFO level message
+    - [W][TEST] WARN level message
+    - [E][TEST] ERROR level message
+  - WARN：
+    - [W][TEST] WARN level message
+    - [E][TEST] ERROR level message
+  - ERROR：
+    - [E][TEST] ERROR level message
+  - 四轮串口实际输出均与预期一致。
+
+- 结论：
+  - PASS。
+  - DEBUG / INFO / WARN / ERROR 四级日志过滤逻辑在实际构建和目标板运行中均正确。
+  - 低于当前阈值的日志调用能够在预处理阶段转换为空操作。
+
+- 边界：
+  - 本测试只验证当前四级静态日志等级。
+  - 尚未实现运行时动态修改日志等级。
+  - 等级测试代码为临时验证逻辑，测试完成后已经删除，不进入 Final Baseline。
+
+## TEST-20260927-03：M3 双任务线程安全 UART 日志压力验证
+
+- 目标：
+  - 验证两个 FreeRTOS Task 高频并发使用统一日志模块时，共享静态日志 buffer 和 USART2 输出不会出现可观察到的交叉破坏。
+  - 验证 CMSIS-RTOS2 Mutex 能够保护当前日志临界区。
+
+- 配置：
+- HeartBeatTask：
+  - Priority：osPriorityNormal
+  - 临时约每 10 ms 输出一条长 A 日志及计数器。
+- UARTTask：
+  - Priority：osPriorityNormal
+  - 临时约每 10 ms 输出一条长 B 日志及计数器。
+- 两个 Task 共同使用：
+  - 同一个 128 B 静态日志 buffer。
+  - 同一个 USART2。
+  - 同一个 CMSIS-RTOS2 Mutex。
+
+- 方法：
+- 使用长 A/B 字符串扩大格式化与 UART 发送临界区。
+- 两个同优先级 Task 高频调用 LOG_INFO()。
+- 连续观察大量 USART2 输出。
+- 检查：
+  - 是否出现半行插入。
+  - 是否出现 A/B 内容混在同一日志。
+  - 是否出现乱码。
+  - 是否出现 Hang 或 HardFault。
+
+- 实际结果：
+  - 部分输出：
+    - [I][MTB] BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB COUNT=0
+    - [I][MTA] AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA COUNT=0
+    - [I][MTB] BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB COUNT=1
+    - [I][MTA] AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA COUNT=1
+    - [I][MTB] BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB COUNT=2
+    - [I][MTA] AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA COUNT=2
+  - 连续压力输出期间：
+    - 未观察到日志半行交叉。
+    - 未观察到 A/B payload 混入同一条日志。
+    - 未观察到乱码。
+    - 未观察到日志异常停止。
+    - 未观察到 Hang。
+    - 未观察到 HardFault。
+
+- 结论：
+  - PASS。
+  - 在当前双任务、同优先级、约 10 ms 高频长日志压力条件下，未观察到共享日志 buffer 或 USART2 输出交叉破坏。
+  - 当前 Mutex 临界区能够保护“共享 buffer 格式化 + UART 阻塞发送”的完整日志事务。
+
+- 边界：
+  - 本实验不能证明所有未来并发场景都绝对安全。
+  - Mutex 保证共享资源互斥，不保证两个任务必须按照固定 A/B 顺序运行。
+  - 当前 LOG_xxx() 设计仅用于正常 Task / Thread 上下文，不作为 ISR-safe API。
+  - 压力测试代码测试完成后已删除，不进入 Final Baseline。
+
+## TEST-20260927-04：M3 调试基础设施最终基线稳定性验证
+
+- 目标：
+  - 验证完成日志模块和 FreeRTOS 输出迁移后的 M3 Final Baseline 能够稳定运行。
+  - 重新测量日志基础设施对 Task Stack 和 FreeRTOS Heap 的运行时影响。
+  - 验证 NRST 和完全断电重新上电后的可重复启动能力。
+
+- 配置：
+  - DEBUG_LOG_ENABLE = 1
+  - DEBUG_LOG_LEVEL = DEBUG_LOG_LEVEL_VALUE_INFO
+  - HeartBeatTask：
+    - Priority：osPriorityNormal
+    - Stack：512 B
+    - osDelay(500U)
+  - UARTTask：
+    - Priority：osPriorityNormal
+    - Stack：1024 B
+    - osDelay(1000U)
+- 日志：
+  - USART2
+  - 128 B static shared buffer
+  - CMSIS-RTOS2 Mutex
+
+- 方法：
+  - 删除日志等级和并发压力临时代码。
+  - 恢复正常 HeartBeatTask + UARTTask 周期结构。
+  - clean build、烧录。
+  - 连续观察 UART、Stack 和 Heap 数据。
+  - 执行 NRST ×3。
+  - 执行完全断电重新上电 ×3。
+
+- 实际结果：
+  - 正常运行日志：
+  - [I][UART] USART2 TX OK
+  - [I][SYS] HeartFree = 384 B  UARTFree = 512 B Heap = 13504 B MinHeap = 13504 B
+  - 资源数据：
+    - HeartBeatTask Stack：
+      - 配置：512 B。
+      - 历史最小剩余：384 B。
+      - 历史峰值使用约 128 B。
+    - UARTTask Stack：
+      - 配置：1024 B。
+      - 历史最小剩余：512 B。
+      - 历史峰值使用约 512 B。
+    - FreeRTOS Heap：
+      - Total：15360 B。
+      - Current Free：13504 B。
+      - Minimum Ever Free：13504 B。
+  - 与 M2 Final Baseline 对比：
+    - HeartBeatTask 最小剩余 Stack：384 B → 384 B。
+    - UARTTask 最小剩余 Stack：560 B → 512 B。
+    - UARTTask 历史峰值使用量增加约 48 B。
+    - Current Free Heap：13592 B → 13504 B。
+    - FreeRTOS Heap 额外消耗约 88 B。
+  - 稳定性：
+    - NRST ×3：全部 PASS。
+    - Power-cycle ×3：全部 PASS。
+    - 六次重新启动后日志、Heartbeat 和资源数据均能恢复正常。
+    - 未观察到 Heap 持续下降。
+    - 未观察到 Hang。
+    - 未观察到 HardFault。
+
+- 结论：
+  - PASS。
+  - M3 Final Baseline 已达到可构建、可烧录、可运行、可观测和可重复启动状态。
+  - 线程安全日志基础设施已经完成当前 M3 范围内的功能和稳定性验证。
+  - 当前运行时资源成本仍具有足够开发余量。
+
+- 边界：
+  - 当前 Stack / Heap 数据只代表 M3 当前同步 UART 日志执行路径。
+  - 后续新增 Queue、Task Notification、Ring Buffer、ADC/DMA、通信协议或其他任务后必须重新测量。
+  - 当前测试不代表已经完成长时间可靠性、异常恢复、ISR 日志或异步日志验证。

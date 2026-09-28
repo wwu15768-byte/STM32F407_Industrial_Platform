@@ -1,62 +1,142 @@
-# 会话交接
+# SESSION_HANDOFF.md
 
-## 当前 Milestone
+建议整个文件直接替换，因为它本身就是当前会话快照。
 
-M2：FreeRTOS 最小系统与调度基础，已完成。
+## 会话交接
 
-下一阶段为 M3：线程安全、可裁剪的调试基础设施。
+当前 Milestone
 
-M1 已完成并冻结为裸机 Known Good Baseline。
+M3：线程安全、可裁剪的调试基础设施，功能实现和板级验证已完成。
+
+当前正在进行 M3 最终文档和 Git 收尾。
+
+M2 已通过 PR 合并到 main。
+
+下一阶段为 M4：数据缓冲与任务间通信，但必须在 M3 正式关闭后再开始。
 
 ## 当前 Branch
 
-feature/m2-freertos-baseline，已关联远程 origin/feature/m2-freertos-baseline。
+feature/m3-debug-infrastructure，已关联远程 origin/feature/m3-debug-infrastructure。
 
-当前 M2 最终功能 checkpoint：
+当前最新功能 checkpoint：
 
-9c7333b：feat: finalize FreeRTOS scheduling baseline
+4701c62：feat: route FreeRTOS runtime output through debug logger
 
-当前正在进行 M2 最终文档同步；文档关闭 checkpoint 完成后统一 push。
+前一功能 checkpoint：
+
+6a760d3：feat: establish debug logging infrastructure
+
+当前 main / origin/main：
+
+72ced0a：Merge pull request #2 from wwu15768-byte/feature/m2-freertos-baseline
+
+当前正在进行 M3 最终文档同步；文档关闭 checkpoint 尚未创建。
 
 ## 已经完成并验证的内容
 
-M0 已完成；main 与 origin/main 保持原稳定基线。
+M0、M1、M2 均已完成。
 
-M1 已完成；最终 M1 checkpoint 为 0b6c86f：docs: close M1 and prepare M2 handoff。
+M2 已正式通过 PR 合并到 main。
 
-STM32F407VGT6 裸机基线已经完成构建、烧录、PB2 heartbeat、USART2 TX、NRST 和断电重启验证。
+M3 已从最新 M2 main 创建 feature/m3-debug-infrastructure。
 
-M2 已从完整 M1 Known Good Baseline 开始并完成 FreeRTOS 集成。
+已建立独立 debug_log 模块。
 
-HAL Timebase 已从 SysTick 迁移到 TIM6。
+当前日志接口支持：
 
-TIM6 当前提供 HAL 1 ms Tick。
+DEBUG
 
-SysTick 当前用于 FreeRTOS 1000 Hz Kernel Tick。
+INFO
 
-FreeRTOS 接口采用 CMSIS-RTOS2。
+WARN
 
-已加入 FreeRTOS Kernel、CMSIS-RTOS2 wrapper、ARM Cortex-M4F GCC port、heap_4 和 FreeRTOSConfig.h。
+ERROR
 
-单用户任务调度已经通过真实硬件验证。
+已建立 DEBUG_LOG_ENABLE 全局编译期开关。
 
-双用户周期任务稳定共存已经通过真实硬件验证。
+已建立 DEBUG_LOG_LEVEL 编译期等级过滤。
 
-不同优先级任务抢占行为已经通过专门实验验证。
+当前日志后端为 USART2。
 
-configUSE_PREEMPTION = 1 已确认。
+UART Handle 通过 DebugLog_Init(&huart2) 注入日志模块。
 
-configUSE_TIME_SLICING = 1 最终有效配置已确认。
+当前日志使用 128 B static shared buffer。
 
-两个相同优先级且持续 Ready 的 Busy Task 已完成时间片调度行为验证。
+CMSIS-RTOS2 Mutex 保护共享日志 buffer 和 UART 发送完整临界区。
 
-Task Stack High Water Mark 已通过 osThreadGetStackSpace() 实际观测。
+Src/freertos.c 中原有日志用途的 HAL_UART_Transmit()、snprintf()、txt_buff、tx_len 和 usart2_test_message 已全部移除。
 
-UARTTask 初始 512 B Stack 历史最小剩余仅 64 B，因此已经调整至 1024 B。
+UARTTask 当前通过：
 
-FreeRTOS Current Free Heap 和 Minimum Ever Free Heap 已通过运行时接口实际观测。
+LOG_INFO("UART", ...)
 
-当前最终任务结构已恢复为正常 HeartBeatTask + UARTTask 周期 baseline。
+LOG_INFO("SYS", ...)
+
+输出正常业务和运行时资源日志。
+
+日志等级过滤四轮板级测试全部通过：
+
+DEBUG：D / I / W / E
+
+INFO：I / W / E
+
+WARN：W / E
+
+ERROR：E
+
+DEBUG_LOG_ENABLE 全局关闭已经通过 clean build。
+
+完整日志开启构建：
+
+FLASH：27424 B
+
+RAM：21056 B
+
+text：27320 B
+
+data：96 B
+
+bss：20960 B
+
+完整日志关闭构建：
+
+FLASH：21316 B
+
+RAM：20512 B
+
+text：21292 B
+
+data：16 B
+
+bss：20496 B
+
+当前实测构建差值：
+
+FLASH：+6108 B
+
+静态 RAM：+544 B
+
+已完成两个同优先级 Task 的高频长日志并发压力实验。
+
+HeartBeatTask 和 UARTTask 均使用 osPriorityNormal。
+
+压力测试期间两个任务约每 10 ms 输出长 A/B 日志。
+
+当前压力条件下未观察到：
+
+日志半行交叉
+
+A/B payload 混合
+
+乱码
+
+Hang
+
+HardFault
+
+实验结束后临时压力测试代码已删除，Final Baseline 已恢复。
+
+当前 Final Baseline：
 
 HeartBeatTask：
 
@@ -66,7 +146,7 @@ Stack：512 B
 
 osDelay(500U)
 
-历史最小剩余 Stack：约 384 B
+历史最小剩余 Stack：384 B
 
 UARTTask：
 
@@ -76,41 +156,71 @@ Stack：1024 B
 
 osDelay(1000U)
 
-历史最小剩余 Stack：约 560 B
+历史最小剩余 Stack：512 B
 
 FreeRTOS Heap：
 
 Total：15360 B
 
-Current Free：13592 B
+Current Free：13504 B
 
-Minimum Ever Free：13592 B
+Minimum Ever Free：13504 B
 
-M2 Final Baseline 已通过 NRST ×3。
+相比 M2 Final Baseline：
 
-M2 Final Baseline 已通过完全断电重新上电 ×3。
+HeartBeatTask Stack 余量：384 B → 384 B
 
-未观察到 HardFault、Hang 或 Heap 持续下降。
+UARTTask Stack 余量：560 B → 512 B
 
-M2 最终功能 checkpoint 为 9c7333b：feat: finalize FreeRTOS scheduling baseline。
+UARTTask 历史峰值 Stack 使用增加约 48 B
 
-已识别并清理 CubeMX/编辑器导致的大量 CRLF/LF EOL-only 工作区噪音，没有将无关 FreeRTOS Middleware 格式变化写入功能提交。
+Free Heap：13592 B → 13504 B
+
+新增运行时 Heap 消耗约 88 B
+
+M3 Final Baseline 已通过 NRST ×3。
+
+M3 Final Baseline 已通过完全断电重新上电 ×3。
+
+六次重新启动后日志、Heartbeat、Task Stack 和 Heap 观测均正常。
+
+未观察到 HardFault、Hang、日志停止或 Heap 持续下降。
 
 ## 当前正在进行的任务
 
-完成 M2 最终文档同步和 Git 收尾。
+完成 M3 最终文档同步和 Git 收尾。
 
-功能代码和板级验证已经完成；当前只需要完成 docs/README 同步，创建 docs: close M2 and prepare M3 handoff checkpoint，并统一 push 到远程。
+功能代码和真实硬件验证已经完成。
+
+当前需要同步：
+
+DAILY_LOG.md
+
+TEST_RECORD.md
+
+PROJECT_STATUS.md
+
+ROADMAP.md
+
+DECISIONS.md
+
+KNOWLEDGE_GAPS.md
+
+SESSION_HANDOFF.md
+
+完成文档后创建 M3 关闭 checkpoint，推送远程并准备 PR。
 
 ## 尚未完成的内容
 
-M2 最终文档关闭 checkpoint 尚未创建。
+M3 最终文档关闭 checkpoint 尚未创建。
 
-M2 最终本地提交尚未统一 push 到远程。
+M3 尚未通过 PR 合并到 main。
 
-尚未进入 M3 线程安全日志与调试基础设施。
+尚未进入 M4 Queue、Task Notification、Ring Buffer、数据所有权和生产者/消费者模型。
 
-尚未进入 Queue、Task Notification、Mutex 等任务间通信与同步阶段。
+当前 LOG_xxx() 不是 ISR-safe API。
+
+尚未实现异步 LogTask、日志 Queue 或 UART DMA logging。
 
 USART2 RX 尚未进行真实板级验证。
 
@@ -124,60 +234,90 @@ USART2 RX 尚未进行真实板级验证。
 
 固件外设层继续统一使用 STM32 HAL。
 
-项目实际目标 MCU 为 STM32F407VGT6、LQFP-100。
+FreeRTOS 应用层继续使用 CMSIS-RTOS2。
 
-FreeRTOS 应用层接口采用 CMSIS-RTOS2。
+HAL Timebase 使用 TIM6，SysTick 用于 FreeRTOS Kernel Tick。
 
-HAL Timebase 使用 TIM6，SysTick 留给 FreeRTOS Kernel Tick。
+应用 Task 不应继续散落直接调用 HAL_UART_Transmit() 输出调试信息。
 
-FreeRTOS 当前使用抢占式调度，configUSE_PREEMPTION = 1。
+调试日志统一通过 debug_log 模块。
 
-当前 FreeRTOS 时间片调度最终有效配置为 configUSE_TIME_SLICING = 1。
+日志模块通过初始化参数获取 UART Handle，不将 huart2 硬编码为模块内部固定依赖。
 
-M2 采用逐步验证方式建立单任务、双任务、优先级、时间片和运行时资源 baseline。
+当前日志使用静态共享 buffer。
 
-UARTTask Stack 采用实际 High Water Mark 测量驱动调整，不根据经验值盲目缩减。
+共享 buffer 和 UART 发送由同一个 CMSIS-RTOS2 Mutex 保护。
 
-M2 最终 baseline 中 HeartBeatTask 和 UARTTask 均使用 osPriorityNormal 并主动阻塞，不保留 Busy Task CPU 满载实验结构。
+Mutex 临界区覆盖格式化和 UART 发送完整事务。
 
-Stack/Heap 运行时监测能力保留在当前 baseline 中，后续新增重要功能后继续重新测量。
+日志等级和全局开关采用编译期预处理裁剪。
 
-FreeRTOS heap 与链接脚本中的传统 C heap 分开理解和记录。
+当前 M3 不引入 LogTask、Queue、DMA 或异步日志，保持同步阻塞日志作为最小稳定基础。
 
-每形成一个经过真实硬件验证的独立状态，就建立有意义的 Git checkpoint。
+当前 LOG_xxx() 仅用于 Task / Thread context，不在 ISR 中调用。
 
-build/、.elf、.hex、.bin 等可重新生成的构建产物继续不进入 Git。
+Stack/Heap 运行时监测继续保留，后续加入重要模块后重新测量。
 
-提交前不仅检查 git diff --check，还要检查真实文件边界，避免 CRLF/LF 等格式噪音污染 Git 历史。
+实验代码不进入 Final Baseline。
+
+每形成一个经过真实硬件验证的稳定状态继续建立独立 Git checkpoint。
 
 ## 最近一次有效测试
 
-TEST-20260924-01：FreeRTOS 同优先级时间片调度验证通过；两个相同优先级、持续 Ready 的 Busy Task 均持续获得 CPU 执行机会，NRST ×3 通过。
+TEST-20260927-01：M3 调试日志基础设施与编译期全局裁剪验证通过。
 
-TEST-20260924-02：M2 FreeRTOS 最终基线稳定性验证通过；HeartBeatTask、UARTTask、Stack/Heap 监测运行正常，NRST ×3 和完全断电重新上电 ×3 均通过。
+TEST-20260927-02：DEBUG / INFO / WARN / ERROR 四级编译期过滤验证通过。
+
+TEST-20260927-03：双任务高频长日志 Mutex 并发压力测试通过；当前测试条件下未观察到日志交叉、乱码、Hang 或 HardFault。
+
+TEST-20260927-04：M3 Final Baseline 稳定性验证通过；HeartBeatTask Free Stack 384 B、UARTTask Free Stack 512 B、FreeRTOS Free Heap 13504 B；NRST ×3 和 Power-cycle ×3 均通过。
 
 ## 本次交接基于的 Commit
 
-9c7333b：feat: finalize FreeRTOS scheduling baseline
+4701c62：feat: route FreeRTOS runtime output through debug logger
+
+前置 M3 checkpoint：
+
+6a760d3：feat: establish debug logging infrastructure
+
+M3 起点：
+
+72ced0a：Merge pull request #2 from wwu15768-byte/feature/m2-freertos-baseline
 
 Working Tree 状态
 
-当前正在修改 M2 最终状态文档。
+当前正在修改 M3 最终文档。
 
-文档提交完成后，应执行：
+文档修改完成后应执行：
 
-git status --short --branch
+git status --short
 
-git log --oneline --decorate -8
+git diff --stat
 
-git branch -vv
+git diff --check
 
-确认工作区 clean，并确认 feature/m2-freertos-baseline 与 origin/feature/m2-freertos-baseline 在最终 push 后同步。
+git diff
+
+确认只有预期 docs 文件发生真实内容变化，不包含无关 CRLF/LF 或第三方源码格式噪音。
+
+随后暂存 docs 并执行：
+
+git diff --cached --stat
+
+git diff --cached --check
+
+git diff --cached
+
+检查通过后创建 M3 文档关闭 checkpoint 并 push。
 
 ## 下一步最合理的一个任务
 
-不要进入 ADC、DMA、RS485 或 Modbus。
+不要开始 M4 功能代码。
 
-先完成当前文档 checkpoint 和远程同步，正式关闭 M2。
+先完成 M3 文档 checkpoint 和远程同步。
 
-之后进入 M3，从最小线程安全日志基础开始：整理 UART 日志接口、日志等级、错误码、调试宏和多任务输出策略，使后续模块不再直接散落调用 HAL_UART_Transmit()。
+然后检查 feature/m3-debug-infrastructure 相对 main 的完整 diff，通过 PR 将 M3 合并到 main。
+
+确认 main、origin/main 和工作区一致后正式关闭 M3。
+
+之后再进入 M4，优先学习和实现 Queue、Task Notification、Ring Buffer、数据所有权和生产者/消费者模型。
