@@ -27,6 +27,7 @@
 /* USER CODE BEGIN Includes */
 #include "usart.h"
 #include "debug_log.h"
+#include "m4_ipc.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -115,6 +116,10 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
+  if (M4Ipc_Init() != M4_IPC_OK)
+  {
+      Error_Handler();
+  }
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -175,9 +180,13 @@ void StartUARTTask(void *argument)
       heap_min_free = xPortGetMinimumEverFreeHeapSize();
 
       LOG_INFO( "SYS",
-                "HeartFree = %lu B  UARTFree = %lu B Heap = %lu B MinHeap = %lu B",
+                "HeartFree=%lu B UARTFree=%lu B "
+                "M4ProdFree=%lu B M4ConsFree=%lu B "
+                "Heap=%lu B MinHeap=%lu B",
                 (unsigned long)heartbeat_stack_free,
                 (unsigned long)uart_stack_free,
+                (unsigned long)M4Ipc_GetProducerStackFree(),
+                (unsigned long)M4Ipc_GetConsumerStackFree(),
                 (unsigned long)heap_free,
                 (unsigned long)heap_min_free);
     }
