@@ -1,78 +1,41 @@
-# 周计划：2026-W39
+# 周计划：2026-W40
 
 > 唯一回答：这周准备干什么？
-> 周期：2026-09-21 至 2026-09-27。每周更新一次。
+> 周期：2026-09-28 至 2026-10-04。每周更新一次。
 
 ## Current Milestone
 
-M2：FreeRTOS 最小系统与调度基础，完成收尾。
+M4：RTOS 通信、同步和数据缓冲，准备正式开始。
 
-M3：线程安全、可裁剪的调试基础设施，准备开始。
+M0～M3 已完成。本周不进入 ADC DMA、UART DMA、RS485、Modbus、CAN、Bootloader 或 Watchdog。
 
 ## 本周核心目标
 
-完成 M2 剩余的调度、运行时资源与稳定性验证，形成经过真实硬件验证的 FreeRTOS Final Baseline；完成文档和 Git 收尾后进入 M3。
+在稳定的 M3 调试基线上完成 M4 启动准备，并建立第一个可解释、可验证的结构化 Queue 生产者/消费者实验；重点理解“为什么传数据、谁拥有数据、Queue 满时怎样处理”，而不是一次实现全部 M4 内容。
 
 ## 本周任务
 
-验证不同优先级任务之间的抢占行为。
-
-测量 HeartbeatTask/UARTTask 的实际 Stack High Water Mark。
-
-测量 FreeRTOS Current Free Heap 和 Minimum Ever Free Heap。
-
-验证两个同优先级、持续 Ready Task 的时间片调度行为。
-
-将实验 Busy Task 恢复为正常周期任务 baseline。
-
-完成 M2 Final Baseline NRST 和完全断电重新上电稳定性验证。
-
-清理 M2 Git 提交边界并建立最终功能 checkpoint。
-
-同步 TEST_RECORD、PROJECT_STATUS、DAILY_LOG、KNOWLEDGE_GAPS、ROADMAP、README 和 SESSION_HANDOFF。
-
-创建 M2 文档关闭 checkpoint 并推送远程。
-
-如果 M2 完整关闭且本周仍有开发时间，只开始 M3 最小日志基础设计，不进入正式业务模块。
+1. 检查本次路线调整 diff，确认 ROADMAP、README、PROJECT_STATUS 和相关文档一致；由用户决定是否 commit，并完成 M3 到 `main` 的 Git 收尾后再建立 M4 功能分支。
+2. 在编码前画出最小 Queue 数据流，定义消息结构、生产者、消费者、数据所有权、阻塞时间和 Queue 满策略。
+3. 实现并验证两个或以上 Task 的结构化 Queue 传递，记录正常、Queue 满和 Consumer 变慢时的行为。
 
 ## 验收标准
 
-不同优先级抢占实验通过。
-
-同优先级时间片调度实验通过。
-
-HeartBeatTask 与 UARTTask Stack 余量具有真实运行时测量数据。
-
-FreeRTOS Heap 当前与历史最低剩余量具有真实运行时测量数据。
-
-M2 Final Baseline 使用正常周期任务结构，不保留 CPU 满载 Busy Task 实验代码。
-
-M2 Final Baseline NRST ×3 通过。
-
-M2 Final Baseline完全断电重新上电 ×3 通过。
-
-最终功能代码形成独立 Git checkpoint。
-
-文档与真实代码、测试和 Git 状态一致。
-
-feature/m2-freertos-baseline 最终同步到远程且工作区 clean。
-
-ROADMAP 中 M2 标记为完成，M3 标记为当前。
+- M0～M3 状态保持完成，M4 保持当前；没有提前实现未来里程碑代码。
+- M3 分支与 `main` 的关系清楚，提交前检查 `git status`、`git diff --stat`、`git diff --check` 和完整 diff。
+- 能用自己的话解释 Queue 与共享全局变量的数据所有权差异。
+- 两个或以上 Task 能通过 Queue 正确传递结构化数据。
+- Queue 满策略有明确选择，并有实际运行证据，不把丢数据或永久阻塞当作“正常”。
+- 测试结束后更新 TEST_RECORD、PROJECT_STATUS、DAILY_LOG 和必要的 KNOWLEDGE_GAPS。
 
 ## 风险
 
-调度实验代码不能长期残留在 Final Baseline 中。
+- 不应在 M4 第一个实验中同时加入 ADC、DMA 或协议解析，否则难以定位并发问题。
+- Queue Item 过大或 Queue Length 过长会直接消耗 FreeRTOS Heap，创建后必须重新测量 Heap。
+- 生产者传递指针时会引入对象生命周期和所有权风险；第一个实验优先使用小型结构体按值传递。
+- 日志模块的 Mutex 已验证资源保护，但不能把 Mutex 当作数据传递机制。
+- 当前 M3 尚未合并到 `main`，开始 M4 功能编码前必须先建立干净、可追踪的分支基线。
 
-Stack/Heap 的当前测量值只适用于当前执行路径，新增功能后必须重新测量。
+## 可选挑战
 
-osThreadGetStackSpace() 反映历史最小剩余 Stack，不能简单理解为瞬时空闲 Stack。
-
-多任务直接调用同一个 UART 输出接口在后续会产生共享资源竞争问题，M3 必须建立线程安全日志策略。
-
-CubeMX 或 Windows 编辑器可能重新保存大量文件并改变 CRLF/LF；提交前必须区分真实代码差异与 EOL-only 噪音。
-
-M2 完成后不能为了赶进度直接跳到 ADC、DMA、RS485 或 Modbus，应先补齐调试和并发基础设施。
-
-## 可选任务
-
-完成 M2 后，为 M3 设计一个最小日志接口草案，包括日志等级、统一入口和线程安全目标，但暂不进行大规模重构。
+仅在 Queue 实验已经通过并能完整解释后，设计 Task Notification 的最小 Task/Task 通知实验；本周不要求完成全部 M4。

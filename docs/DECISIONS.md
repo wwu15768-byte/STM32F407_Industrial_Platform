@@ -85,3 +85,21 @@
     - 当前 LOG_xxx() 仅用于正常 Task / Thread context，不作为 ISR-safe API。
     - 后续若引入异步 LogTask、Queue、UART DMA 或其他日志后端，应建立新的设计决策并说明对本决策的扩展或替代关系。
     - 新增重要日志调用路径后仍需重新检查 Task Stack、FreeRTOS Heap、Flash 和静态 RAM 成本。
+
+## DEC-20260929-01：扩展为 M0～M15 的数据采集与多总线通信路线
+
+- 状态：已接受
+- 决策：
+    - 项目长期定位调整为“基于 STM32F407VGT6 + FreeRTOS 的工业实时数据采集与多总线通信平台”。
+    - M0～M3 已完成历史保持不变，M4 成为当前阶段。
+    - M5 升级为 ADC + Timer + DMA 数据采集子系统。
+    - 新增 M10 CAN、M11 Bootloader / IAP、M12 Watchdog / Reset Cause / Fault Diagnostics。
+    - 原 M10 上位机链路、M11 系统联调、M12 项目收尾依次顺延为 M13、M14、M15。
+    - 后续严格按 M4 → M5 → M6 → M7 → M8 → M9 → M10 → M11 → M12 → M13～M15 的依赖顺序推进。
+- 原因：先建立 RTOS 数据传递和 ISR/Task 边界，再逐步增加实时采集、串行通信、多总线、升级和可靠性能力，能够控制变量数量，使每个阶段保持可运行、可验证和可解释。
+- 影响：
+    - 当前不实现 CAN、Bootloader、ADC DMA、Watchdog 或 HardFault Diagnostic，只记录后续目标、依赖和验收标准。
+    - 不预设 ADC/CAN/RS485 引脚、采样通道、Timer、Flash 分区或未确认的外部硬件。
+    - CAN 当前只规划 CAN 2.0 / bxCAN 基础，不加入 CAN FD、UDS、J1939 或 CANopen。
+    - 第一版 Bootloader 不加入 Secure Boot、加密、数字签名、双 Bank、A/B Firmware 或网络 OTA。
+    - Linux 只作为两年内逐步补充的开发与用户态基础能力，不进入 STM32 项目里程碑，也不加入 Linux Kernel 源码学习。

@@ -1,8 +1,8 @@
 # STM32F407 Industrial Platform
 
-本项目以 STM32F407VGT6 为核心，逐步实现一个基于 FreeRTOS 的工业实时数据采集与设备管理平台，同时将项目作为嵌入式软件工程实践载体，训练驱动开发、RTOS、通信、测试、调试、Git 和工程文档能力。本仓库采用 STM32 HAL、CMake、Ninja 和 Arm GNU Toolchain (arm-none-eabi)，逐步建立可复现、可验证、便于维护的固件工程。
+本项目以 STM32F407VGT6 为核心，逐步实现一个基于 FreeRTOS 的工业实时数据采集与多总线通信平台，并补充 MCU 工程中常见的数据采集、CAN、Bootloader、故障诊断和系统可靠性能力。同时将项目作为嵌入式软件工程实践载体，训练驱动开发、RTOS、通信、测试、调试、Git 和工程文档能力。本仓库采用 STM32 HAL、CMake、Ninja 和 Arm GNU Toolchain (arm-none-eabi)，逐步建立可复现、可验证、便于维护的固件工程。
 
-当前已完成 **M2：FreeRTOS 最小系统与调度基础**，正在准备进入 **M3：线程安全、可裁剪的调试基础设施**。当前工程已经具备可重复构建、烧录和真实目标板运行能力，并完成 FreeRTOS 单任务、双任务、优先级抢占、同优先级时间片、Task Stack、FreeRTOS Heap、NRST 和完全断电重新上电验证。
+当前已完成 **M3：线程安全、可裁剪的调试基础设施**，准备正式进入 **M4：RTOS 通信、同步和数据缓冲**。当前工程已经具备可重复构建、烧录和真实目标板运行能力，并完成 FreeRTOS 调度基础、运行时资源观测、统一 UART Logger、日志等级、编译期裁剪、Mutex 线程安全输出、NRST 和完全断电重新上电验证。Queue、Task Notification、Binary Semaphore 和 Ring Buffer 尚未开始实现。
 
 ## 硬件与软件约束
 
@@ -81,32 +81,45 @@ CubeMX 工程输入、HAL/CMSIS、FreeRTOS、启动文件、链接脚本、`.ioc
 - [x] M0：建立开发环境、项目管理体系和稳定 Git 基线。
 - [x] M1：建立可下载、可运行、可观测、可重复启动的 STM32F407VGT6 裸机 Known Good Baseline。
 - [x] M2：完成 FreeRTOS 最小系统、CMSIS-RTOS2、单任务、双任务、优先级抢占、同优先级时间片、Task Stack 和 FreeRTOS Heap 验证。
-- [ ] M3：建立线程安全、可裁剪的调试基础设施。
-- [ ] M4：建立任务间通信、同步和数据缓冲基础。
+- [x] M3：建立并验证线程安全、可裁剪的同步 UART 调试基础设施。
+- [ ] **M4（当前）**：建立 Queue、Task Notification、Binary Semaphore、Mutex 和 Ring Buffer 基础。
+- [ ] M5：建立 ADC + Timer + DMA 实时数据采集子系统。
+- [ ] M6：实现 UART DMA + IDLE 不定长通信。
+- [ ] M7：实现 RS485 半双工通信。
+- [ ] M8：实现基础 Modbus RTU 通信。
+- [ ] M9：建立统一数据模型。
+- [ ] M10：建立 bxCAN 基础通信与实时收发模型。
+- [ ] M11：建立 UART 或 RS485 Bootloader / IAP 基线。
+- [ ] M12：建立 Watchdog、Reset Cause 与 Fault Diagnostics 可靠性基础。
+- [ ] M13：打通 PC、Node-RED 和 InfluxDB 基础链路。
+- [ ] M14：完成系统集成、异常注入和稳定性验证。
+- [ ] M15：完成工程收尾、演示和项目表达材料。
 
 ## 当前构建状态
 
-## 当前构建状态
-
-当前 M2 Final Baseline 已通过 CMake + Ninja + GNU Arm GCC 构建，并成功生成 ELF/HEX/BIN 固件。
+当前 M3 Final Baseline 已通过 CMake + Ninja + GNU Arm GCC 构建，并成功生成 ELF/HEX/BIN 固件。
 
 最近一次最终 baseline 构建资源占用：
 
-- RAM：20992 B / 128 KB，16.02%
-- FLASH：24364 B / 1 MB，2.32%
+- RAM：21056 B / 128 KB，16.06%
+- FLASH：27424 B / 1 MB，2.62%
 
 当前真实板级 baseline：
 
 - HeartBeatTask：`osPriorityNormal`，512 B Stack，`osDelay(500U)`。
 - UARTTask：`osPriorityNormal`，1024 B Stack，`osDelay(1000U)`。
 - HeartBeatTask 历史最小剩余 Stack：约 384 B。
-- UARTTask 历史最小剩余 Stack：约 560 B。
-- FreeRTOS Current Free Heap：13592 B。
-- FreeRTOS Minimum Ever Free Heap：13592 B。
+- UARTTask 历史最小剩余 Stack：约 512 B。
+- FreeRTOS Current Free Heap：13504 B。
+- FreeRTOS Minimum Ever Free Heap：13504 B。
+- DEBUG / INFO / WARN / ERROR 编译期过滤：通过。
+- 双任务共享 UART Mutex 并发日志压力测试：通过当前测试条件。
 - NRST ×3：通过。
 - 完全断电重新上电 ×3：通过。
 
-M2 最终功能 checkpoint 为 `9c7333b`：`feat: finalize FreeRTOS scheduling baseline`。
+M3 最终功能 checkpoint 为 `4701c62`：`feat: route FreeRTOS runtime output through debug logger`；M3 文档关闭 checkpoint 为 `75523b6`：`docs: close M3 and prepare M4 handoff`。
+
+当前没有实现 ISR-safe logging、异步日志、HardFault Diagnostic、ADC DMA、UART DMA、RS485、Modbus、CAN、Bootloader 或 Watchdog；这些能力按 [`ROADMAP.md`](docs/ROADMAP.md) 的依赖顺序逐阶段实现。
 
 ## 文档
 

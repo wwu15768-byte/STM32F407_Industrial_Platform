@@ -3,15 +3,15 @@
 > 唯一回答：项目现在在哪？
 > 更新时机：项目状态发生明显变化时。
 
-更新时间：2026-09-27
+更新时间：2026-09-29
 
 ## Current Milestone
 
-M3：线程安全、可裁剪的调试基础设施，功能实现和真实 STM32F407VGT6 板级验证已完成。当前正在进行 M3 最终文档和 Git 收尾；完成 PR 合并后再进入 M4：数据缓冲与任务间通信。
+M4：RTOS 通信、同步和数据缓冲。M0～M3 已完成，M4 为当前阶段；本次只完成路线规划和文档调整，尚未开始 M4 功能实现。
 
 ## Current Goal
 
-完成 M3 最终文档和 Git 收尾，将已经通过统一 UART 日志、DEBUG/INFO/WARN/ERROR 等级过滤、全局编译期裁剪、多任务 Mutex 并发压力、Task Stack、FreeRTOS Heap、NRST 和完全断电重新上电验证的调试基础设施固化并合并到 main。M3 完整关闭后再进入 M4，开始 Queue、Task Notification、Ring Buffer、数据所有权和生产者/消费者模型。
+在已完成的 M3 调试基础设施上，按 Queue → Task Notification / Binary Semaphore → Ring Buffer 的最小学习顺序进入 M4，建立结构化数据传递、轻量通知、同步、共享资源保护、生产者/消费者和数据所有权基础。开始编码前先明确每种机制的语义和最小验证方案，不提前实现 ADC DMA、CAN、Bootloader 或 Watchdog。
 
 ## Completed
 
@@ -99,7 +99,7 @@ M3：线程安全、可裁剪的调试基础设施，功能实现和真实 STM32
 - 日志模块当前使用 128 B 静态共享 buffer。
 - 已使用 CMSIS-RTOS2 Mutex 保护共享日志 buffer 和 USART2 阻塞发送完整事务。
 - FreeRTOS UARTTask 原有直接 HAL_UART_Transmit() 和 snprintf() 日志路径已经迁移到统一 LOG_INFO()。
-- 已形成并推送 `6a760d3：feat: establish debug logging infrastructure`。s
+- 已形成并推送 `6a760d3：feat: establish debug logging infrastructure`。
 - 已形成并推送 `4701c62：feat: route FreeRTOS runtime output through debug logger`。
 - 已完成 DEBUG_LOG_ENABLE = 1 / 0 clean build 对比。
 - 完整日志开启时构建结果为 FLASH 27424 B、RAM 21056 B。
@@ -116,10 +116,12 @@ M3：线程安全、可裁剪的调试基础设施，功能实现和真实 STM32
 - 六次重新启动后均能恢复正常日志、Heartbeat 和运行时资源观测。
 - 未观察到 HardFault、Hang、日志异常停止或 Heap 持续下降。
 - 当前 M3 已达到可构建、可烧录、可运行、可观测、可裁剪、可重复启动并具有共享 UART 日志互斥保护的稳定状态。
+- 已形成并推送 M3 文档关闭 checkpoint `75523b6：docs: close M3 and prepare M4 handoff`。
+- 项目路线已扩展为 M0～M15：M10 新增 CAN，M11 新增 Bootloader / IAP，M12 新增 Watchdog / Reset Cause / Fault Diagnostics，原 M10～M12 顺延为 M13～M15。
 
 ## In Progress
 
-M3 最终文档和 Git 收尾。M3 功能代码、板级验证、资源测量和并发压力实验已经完成；当前正在同步测试记录、项目状态、每日开发日志、技术决策、知识缺口、路线图和会话交接。文档 checkpoint 完成后推送远程并通过 PR 合并到 main。
+M4 已进入路线和学习准备阶段。本次正在同步 ROADMAP、README、PROJECT_STATUS、DECISIONS、WEEKLY_PLAN、DAILY_LOG 和 SESSION_HANDOFF；没有实现 Queue、Task Notification、Binary Semaphore 或 Ring Buffer，也没有修改固件、CubeMX、`.ioc` 或硬件配置。
 
 ## Blocked
 
@@ -129,15 +131,15 @@ M3 最终文档和 Git 收尾。M3 功能代码、板级验证、资源测量和
 
 无已确认固件 Bug。
 
-当前日志接口只作为正常 Task / Thread 上下文 API，尚未实现 ISR-safe 日志；异步日志、DMA 日志、Queue、Task Notification、Ring Buffer、ADC、DMA、USART2 RX、RS485 和 Modbus 属于后续里程碑范围，不作为已知 Bug。
+当前日志接口只作为正常 Task / Thread 上下文 API，尚未实现 ISR-safe 日志；异步日志、DMA 日志、Queue、Task Notification、Ring Buffer、ADC、DMA、USART2 RX、RS485、Modbus、CAN、Bootloader、Watchdog 和 HardFault Diagnostic 属于后续里程碑范围，不作为已知 Bug。
 
 ## Current Branch
 
-- feature/m3-debug-infrastructure，已关联远程 origin/feature/m3-debug-infrastructure。
-- 当前 M3 最新功能 checkpoint 为 `4701c62`：feat: route FreeRTOS runtime output through debug logger。
-- 前一功能 checkpoint 为 `6a760d3`：feat: establish debug logging infrastructure。
-- 当前 main 与 origin/main 位于 `72ced0a`，已经包含完整 M2。
-- M3 功能 checkpoint 已推送远程；当前正在进行最终文档同步，文档关闭 checkpoint 尚未创建。
+- `feature/m3-debug-infrastructure`，已关联远程 `origin/feature/m3-debug-infrastructure`。
+- M3 最终功能 checkpoint 为 `4701c62`：`feat: route FreeRTOS runtime output through debug logger`。
+- M3 文档关闭 checkpoint 为 `75523b6`：`docs: close M3 and prepare M4 handoff`，修改本次路线前已与远程功能分支同步。
+- 当前 `main` 与 `origin/main` 位于 `72ced0a`，已经包含完整 M2；M3 尚未通过 PR 合并到 `main`。
+- 本次路线文档修改保持未提交，等待人工检查后再决定 commit 和后续合并。
 
 ## Last Verified Function
 
@@ -165,8 +167,6 @@ M3 最终文档和 Git 收尾。M3 功能代码、板级验证、资源测量和
 
 ## Next Step
 
-完成 M3 文档关闭 checkpoint 并推送 feature/m3-debug-infrastructure。
+先由用户检查本次路线文档 diff，再决定是否创建文档 commit；本次不自动 commit。
 
-检查功能分支相对 main 的完整 diff、git diff --check、Git 历史和远程 tracking 状态后，通过 PR 将 M3 合并到 main。
-
-确认本地 main 与 origin/main 同步、工作区 clean 后正式关闭 M3。随后进入 M4：数据缓冲与任务间通信，优先学习 Queue、Task Notification、Ring Buffer、数据所有权和生产者/消费者模型，不提前进入 ADC、DMA、RS485 或 Modbus。
+之后完成 M3 功能分支到 `main` 的 PR 合并和本地同步，并从稳定基线开始 M4 功能分支。M4 第一个学习与实现任务应聚焦结构化 Queue 生产者/消费者实验，并在编码前说明数据所有权、Queue 满策略和验收方法；不提前进入 ADC DMA、CAN、Bootloader 或 Watchdog。

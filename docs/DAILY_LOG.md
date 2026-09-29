@@ -672,3 +672,69 @@
 ## 明天下一步
 
 - 完成 M3 最终文档同步，检查真实 diff 边界并创建 docs: close M3 and prepare M4 handoff checkpoint。推送远程后通过 PR 将 M3 合并到 main；确认本地与远程稳定基线同步后再进入 M4，不提前开始 ADC、DMA、RS485 或 Modbus。
+
+# 2026-09-29
+
+## 今日计划
+
+- 核对仓库实际代码、M0～M3 测试记录和 Git checkpoint。
+- 正式扩展项目路线，保持 M0～M3 历史不变并将 M4 设为当前阶段。
+- 同步路线相关文档，检查旧里程碑编号、状态冲突和修改边界。
+
+## 实际完成
+
+- 核对 `debug_log`、FreeRTOS 时基/任务代码、TEST_RECORD、DECISIONS 和 Git 历史，确认 M0～M3 均有实际证据支撑。
+- 确认 M3 已具备同步 UART Logger、四级 Log Level、错误码、日志宏、`snprintf()` / `vsnprintf()`、CMSIS-RTOS2 Mutex、线程安全输出和编译期裁剪。
+- 确认当前没有系统化 HardFault Diagnostic、ADC DMA、UART DMA、CAN、Bootloader 或 Watchdog 实现。
+- 将 ROADMAP 从 M0～M12 扩展为 M0～M15：
+    - M5 升级为 ADC + Timer + DMA 数据采集子系统。
+    - 新增 M10 CAN。
+    - 新增 M11 Bootloader / IAP。
+    - 新增 M12 Watchdog / Reset Cause / Fault Diagnostics。
+    - Old M10 / M11 / M12 顺延为 New M13 / M14 / M15。
+- 为 M0～M15 分别补充 Goal、Knowledge、Implementation、Verification 和 Deliverables。
+- 同步 README、PROJECT_STATUS、DECISIONS、WEEKLY_PLAN 和 SESSION_HANDOFF，使当前状态统一为“M3 已完成，M4 当前”。
+- 明确 Linux 只作为开发与用户态辅助能力，不进入 STM32 项目里程碑，也不加入 Linux Kernel 主线。
+
+## 验收情况
+
+- M0～M3 已完成历史：保留。
+- M4 当前状态：已同步。
+- M0～M15 五类路线信息完整性检查：通过。
+- Old M10 → New M13、Old M11 → New M14、Old M12 → New M15 映射：已记录。
+- 源码、CubeMX、`.ioc`、硬件引脚和外设配置：未修改。
+- 新功能代码与未来空模块：未创建。
+- 固件构建与板级测试：本次未执行，因为没有修改固件；沿用已记录的 M3 Final Baseline 证据，不新增或伪造结果。
+
+## 未完成
+
+- 本次文档修改尚未 commit，等待用户检查。
+- M3 分支尚未通过 PR 合并到 `main`。
+- M4 Queue、Task Notification、Binary Semaphore、Mutex 对比和 Ring Buffer 尚未开始实现。
+
+## 今日 Bug
+
+- 无固件 Bug。
+- 文档检查发现两处 Markdown 行尾空格，已在提交前清理。
+
+## 今日学习
+
+- 路线图中的“待开始”必须描述目标与验收边界，不能写成已经实现。
+- 扩展项目范围时应保持已完成历史稳定，通过新增里程碑和编号映射表达变化。
+- CAN、Bootloader 和 Watchdog 只有建立在 M4 并发基础、M5 数据链路和 M6～M9 通信/数据模型之上，才不会变成相互割裂的技术堆叠。
+
+## 尚未理解
+
+- M4 各实验的最终消息结构、Queue Length、阻塞时间和 Queue 满策略尚未设计；进入 M4 编码前再结合最小实验确定。
+- ADC、CAN、RS485 的具体引脚和硬件资源尚未做冲突检查，不在当前阶段假设。
+
+## Git
+
+- Branch：`feature/m3-debug-infrastructure`。
+- M3 文档关闭 checkpoint：`75523b6`。
+- 本次路线文档修改：未提交，等待用户检查后决定是否 commit。
+- 本次不执行自动 commit。
+
+## 明天下一步
+
+- 用户检查本次文档 diff。确认后再决定 commit，并完成 M3 到 `main` 的 Git 收尾；随后从稳定基线建立 M4 功能分支，先设计和验证最小结构化 Queue 生产者/消费者实验。
