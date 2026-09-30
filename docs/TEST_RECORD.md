@@ -767,3 +767,186 @@
   - 当前 Stack / Heap 数据只代表 M3 当前同步 UART 日志执行路径。
   - 后续新增 Queue、Task Notification、Ring Buffer、ADC/DMA、通信协议或其他任务后必须重新测量。
   - 当前测试不代表已经完成长时间可靠性、异常恢复、ISR 日志或异步日志验证。
+
+## TEST-20260930-01：M4 Queue Producer / Consumer 正常通信基线验证
+
+- 目标：
+  - 验证两个 FreeRTOS Task 能够通过 CMSIS-RTOS2 Message Queue 传递结构化数据。
+  - 验证小型结构体按值复制的数据所有权行为。
+  - 验证 Consumer 在 Queue 为空时能够阻塞等待，而不是持续轮询。
+  - 验证 M3 HeartBeatTask、UARTTask 和 Debug Logger 在新增 Queue 与两个 Task 后仍能正常运行。
+
+- 配置：
+  - Queue：
+    - Name：`M4DataQueue`
+    - Length：8
+    - Item：`M4QueueMessage_t`
+    - Item Size：12 B
+  - `M4QueueMessage_t`：
+    - `uint32_t sequence`
+    - `uint32_t value`
+    - `uint32_t tick`
+  - M4ProducerTask：
+    - Priority：`osPriorityNormal`
+    - 初始 Stack：512 B
+    - Period：200 ms
+    - Queue Put Timeout：0
+  - M4ConsumerTask：
+    - Priority：`osPriorityNormal`
+    - Stack：1024 B
+    - Queue Get Timeout：`osWaitForever`
+
+- 方法：
+  - Producer 周期生成 `M4QueueMessage_t`。
+  - `sequence` 每轮递增。
+  - `value = sequence × 10`。
+  - `tick = osKernelGetTickCount()`。
+  - 使用 `osMessageQueuePut()` 将结构体复制进入 Queue。
+  - Consumer 使用 `osMessageQueueGet(..., osWaitForever)` 阻塞等待。
+  - Consumer 检查 Sequence 连续性并通过 Debug Logger 输出接收结果。
+  - 同时观察 HeartBeatTask、UARTTask、Task Stack 和 FreeRTOS Heap。
+
+- 构建结果：
+  - RAM：21072 B / 128 KB，16.08%。
+  - FLASH：29252 B / 1 MB，2.79%。
+  - text：29148 B。
+  - data：96 B。
+  - bss：20976 B。
+
+- 实际结果：
+  - 连续观察到：
+    ```text
+    [I][M4Q] rx seq=1 value=10 tick=1 count=0
+    [I][M4Q] rx seq=2 value=20 tick=201 count=0
+    [I][M4Q] rx seq=3 value=30 tick=401 count=0
+    [I][M4Q] rx seq=4 value=40 tick=601 count=0
+    ```
+  - Sequence 保持连续。
+  - `value` 与 `sequence × 10` 一致。
+  - 相邻 Producer Tick 基本相差 200。
+  - Consumer Get 后 Queue Count 持续为 0。
+  - 未观察到 Queue Full。
+  - 未观察到 Sequence Gap。
+  - HeartBeatTask 和 UARTTask 保持正常。
+  - 初始资源数据：
+    ```text
+    HeartFree=384 B
+    UARTFree=496 B
+    M4ProdFree=296 B
+    M4ConsFree=496 B
+    Heap=11560 B
+    MinHeap=11560 B
+    ```
+
+- 结论：
+  - PASS。
+  - 两个 Task 已能够通过 Queue 正确传递结构化数据。
+  - 当前 Queue 消息采用按值复制，Producer 局部对象与 Queue 内部数据副本具有清晰所有权边界。
+  - Consumer 在没有数据时通过阻塞等待释放 CPU。
+  - M3 基础功能在加入 Queue 和两个 M4 Task 后仍能够正常运行。
+
+- 边界：
+  - 本测试只验证 Task → Task Queue。
+  - 未验证 ISR → Queue。
+  - 未使用指针消息。
+  - 未验证 Queue Full 和长期 Producer / Consumer 速率失衡，该部分单独进行压力测试。
+  - 当前 200 ms 软件周期仅用于 M4 Queue 教学，不代表后续 M5 ADC 实时采集架构。
+
+## TEST-20260930-02：M4 Queue Full、Backpressure 与 Producer Stack 压力验证
+
+- 目标：
+  - 人工制造 Producer 长期快于 Consumer 的条件。
+  - 验证有限长度 Queue 的积压、Queue Full、Put Failure、Drop 和 Sequence Gap 行为。
+  - 验证异常日志路径对 M4ProducerTask Stack 的最坏情况影响。
+  - 根据实际 Stack Watermark 修正任务 Stack 配置。
+
+- 压力配置：
+  - Queue Length：8。
+  - Producer Period：约 50 ms。
+  - Consumer 人工处理延迟：约 500 ms。
+  - Queue Put Timeout：0。
+  - Producer 初始 Stack：512 B。
+  - Consumer Stack：1024 B。
+
+- 方法：
+  - 让 Producer 长期生产速度显著高于 Consumer。
+  - 观察 Queue Count。
+  - Put 失败时增加 `drop_count`。
+  - 首次 Drop 及每累计一定数量 Drop 输出 Queue Full Warning。
+  - Consumer 使用 `expected_sequence` 检查接收序号缺口。
+  - 周期测量所有主要 Task Stack 和 FreeRTOS Heap。
+  - 当发现 Stack 风险后增加 Producer Stack，并在相同压力条件下重新测试。
+
+- 实际结果：
+  - Queue Count 实际达到 8。
+  - Queue Full 后观察到：
+    ```text
+    [W][M4Q] queue full: drop=1 seq=10 count=8
+    ```
+  - 后续 Drop Count 持续增加。
+  - Queue Full 后 Consumer 仍继续接收到此前已经成功入队的：
+    ```text
+    seq=2
+    seq=3
+    ...
+    seq=9
+    ```
+  - 说明新的 Put Failure 不会破坏 Queue 中已有消息。
+  - 当旧库存逐步消费后开始观察到：
+    ```text
+    [W][M4Q] sequence gap: expected=10 actual=12
+    ```
+  - 后续继续观察到：
+    ```text
+    expected=13 actual=22
+    expected=23 actual=32
+    expected=33 actual=42
+    ```
+  - 证明 Drop 最终能够由 Consumer 的 Sequence Gap 检测出来。
+  - 初始 Producer Stack = 512 B 时，压力路径观察到：
+    ```text
+    M4ProdFree=0 B
+    ```
+  - 正常路径下相同初始 Stack 曾观察到：
+    ```text
+    M4ProdFree=296 B
+    ```
+  - 说明 Queue Full 后的错误日志和格式化路径显著增加 Producer 历史峰值 Stack 使用。
+  - 将 Producer Stack 调整为 1024 B。
+  - 相同压力条件重新验证后稳定资源数据为：
+    ```text
+    HeartFree=384 B
+    UARTFree=496 B
+    M4ProdFree=512 B
+    M4ConsFree=496 B
+    Heap=11048 B
+    MinHeap=11048 B
+    ```
+  - Producer Stack 增加 512 B 后 FreeRTOS Free Heap 从 11560 B 降至 11048 B，差值同样为 512 B。
+
+- Final Baseline 恢复：
+  - Producer Period 恢复为 200 ms。
+  - 删除 Consumer 人工 500 ms Delay。
+  - Queue Length 保持 8。
+  - Producer Stack 保持 1024 B。
+  - Consumer Stack 保持 1024 B。
+  - Put Timeout 保持 0。
+  - Consumer 保持 `osWaitForever`。
+  - 恢复后的稳定性测试通过。
+  - 未观察到正常 baseline 下的 Queue Full 或 Sequence Gap。
+
+- 结论：
+  - PASS。
+  - 固定长度 Queue 能够吸收短时间突发，但不能解决长期 Producer Throughput 大于 Consumer Throughput 的问题。
+  - Queue Full 时 timeout = 0 能够立即暴露 Backpressure，而不是阻塞 Producer。
+  - Queue 已存在的数据不会被新的 Put Failure 破坏。
+  - Drop 会在旧库存消费后体现为 Consumer Sequence Gap。
+  - Task Stack 必须按照最坏执行路径测量。
+  - 初始 512 B Producer Stack 对当前压力错误日志路径缺少安全余量。
+  - 1024 B Producer Stack 在相同压力路径下保留约 512 B 历史最小余量，因此作为当前 Final Baseline 配置。
+
+- 边界：
+  - 本测试使用人工构造的 Producer / Consumer 速率失衡。
+  - 同步 Debug Logger 会对具体任务时序产生扰动。
+  - 当前结果不能代表后续 ADC DMA 实际吞吐能力。
+  - 尚未验证 ISR → Task Queue 或 Task Notification。

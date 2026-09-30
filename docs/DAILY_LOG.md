@@ -738,3 +738,202 @@
 ## 明天下一步
 
 - 用户检查本次文档 diff。确认后再决定 commit，并完成 M3 到 `main` 的 Git 收尾；随后从稳定基线建立 M4 功能分支，先设计和验证最小结构化 Queue 生产者/消费者实验。
+
+# 2026-09-30
+
+## 今日计划
+
+- 正式进入 M4 RTOS 通信与同步阶段。
+- 从已完成 M3 的稳定 `main` 基线建立 M4 功能分支。
+- 建立最小结构化 Queue Producer / Consumer 实验。
+- 验证 Queue 按值传递、阻塞接收、Queue Full、背压、数据丢失和序号缺口行为。
+- 测量新增 Queue 和 Task 后的 FreeRTOS Heap 与 Task Stack 使用情况。
+- 在压力路径下验证任务 Stack 配置是否安全，并形成 M4 Queue 通信 baseline。
+
+## 实际完成
+
+- 确认 M3 已通过 PR 合并到 `main`，Merge Commit 为 `c13b8e5`。
+- 从最新稳定 `main` 建立 `feature/m4-rtos-communication-baseline`。
+- 将扩展后的 M0～M15 路线文档提交到 M4 分支。
+- 创建并推送 `ed6c3a7：docs: update roadmap for expanded project milestones`。
+- 为避免继续扩大 `Src/freertos.c` 的应用逻辑职责，建立独立 M4 IPC 模块：
+  - `Inc/m4_ipc.h`
+  - `Src/m4_ipc.c`
+- 在根目录 `CMakeLists.txt` 中显式加入 `Src/m4_ipc.c`，不修改 CubeMX 生成的 `cmake/stm32cubemx/CMakeLists.txt`。
+- `Src/freertos.c` 只负责调用 `M4Ipc_Init()` 启动 M4 IPC 模块，M4 Queue、Task Handle 和具体任务逻辑保持在 `m4_ipc.c` 内部。
+- 建立 `M4QueueMessage_t` 结构体，包含：
+  - `sequence`
+  - `value`
+  - `tick`
+- 当前 Queue 消息大小为 12 B。
+- 建立长度为 8 的 `M4DataQueue`。
+- 建立 `M4ProducerTask` 和 `M4ConsumerTask`。
+- Queue 正常 baseline 配置：
+  - Queue Length：8。
+  - Producer Period：200 ms。
+  - Producer Priority：`osPriorityNormal`。
+  - Consumer Priority：`osPriorityNormal`。
+  - Producer Stack：最终调整为 1024 B。
+  - Consumer Stack：1024 B。
+  - Queue Put Timeout：0。
+  - Consumer Queue Get Timeout：`osWaitForever`。
+- Producer 使用局部 `M4QueueMessage_t` 生成测试数据，并通过 `osMessageQueuePut()` 将结构体内容按值复制进入 Queue。
+- Consumer 使用 `osMessageQueueGet(..., osWaitForever)` 阻塞等待消息，没有数据时进入 Blocked 状态，不进行 Busy Polling。
+- 正常路径实板输出连续观察到：
+  - `seq=1, 2, 3 ...`
+  - `value = sequence × 10`
+  - Tick 基本稳定每 200 tick 增加一次。
+  - Queue Get 后剩余 `count=0`。
+- 正常路径未观察到 sequence gap、Queue Full、Hang 或 HardFault。
+- 原 M3 HeartBeatTask、UARTTask 和 Debug Logger 在 M4 Queue 实验期间继续正常工作。
+- 首轮 Debug 构建通过，构建结果为：
+  - RAM：21072 B / 128 KB，16.08%。
+  - FLASH：29252 B / 1 MB，2.79%。
+  - text：29148 B。
+  - data：96 B。
+  - bss：20976 B。
+- 初始正常路径资源实测：
+  - HeartBeatTask 历史最小剩余 Stack：384 B。
+  - UARTTask 历史最小剩余 Stack：496 B。
+  - M4ProducerTask 历史最小剩余 Stack：296 B。
+  - M4ConsumerTask 历史最小剩余 Stack：496 B。
+  - FreeRTOS Current Free Heap：11560 B。
+  - FreeRTOS Minimum Ever Free Heap：11560 B。
+- 相比 M3 Final Baseline 的 13504 B Free Heap，初始 M4 Queue + 2 Task 配置额外消耗约 1944 B FreeRTOS Heap。
+- 完成 Queue Full / Backpressure 压力实验：
+  - Producer 临时调整为约每 50 ms 生产一条消息。
+  - Consumer 临时增加约 500 ms 处理延迟。
+  - Producer 速率明显高于 Consumer。
+- 压力测试中实物观察到 Queue Count 上升并达到 8。
+- Queue 满后，`osMessageQueuePut()` 因 timeout = 0 立即失败，没有阻塞 Producer。
+- 建立 `drop_count`，观察到 Drop Count 持续增加。
+- 压力实验日志实际观察到：
+  - `queue full: drop=1 seq=10 count=8`
+  - 后续 Drop Count 持续增加。
+- 确认 Queue Full 不会破坏已经成功进入 Queue 的旧消息；Consumer 在 Queue 已经开始产生 Drop 后，仍继续依次消费先前已经排队的连续消息。
+- 当旧 Queue 库存被逐步消费后，Consumer 开始观察到 sequence gap。
+- 实际观察到包括：
+  - `expected=10 actual=12`
+  - `expected=13 actual=22`
+  - 后续持续出现与 Drop 对应的序号缺口。
+- 完成完整背压证据链验证：
+  - Producer 长期速度高于 Consumer。
+  - Queue Occupancy 上升。
+  - Queue 满。
+  - Put 失败。
+  - Message Drop。
+  - Consumer 最终检测到 Sequence Gap。
+- 压力测试中发现初始 512 B Producer Stack 的历史最小剩余空间降至 0 B。
+- 对比正常路径和压力路径，确认 Stack 峰值主要由 Queue Full 后的 `LOG_WARN()` 异常日志路径进一步放大，而不是正常 `osMessageQueuePut()` 路径本身。
+- 将 M4ProducerTask Stack 从 512 B 调整为 1024 B。
+- 以相同压力条件重新验证后资源数据稳定为：
+  - HeartBeatTask 历史最小剩余 Stack：384 B。
+  - UARTTask 历史最小剩余 Stack：496 B。
+  - M4ProducerTask 历史最小剩余 Stack：512 B。
+  - M4ConsumerTask 历史最小剩余 Stack：496 B。
+  - FreeRTOS Current Free Heap：11048 B。
+  - FreeRTOS Minimum Ever Free Heap：11048 B。
+- Producer Stack 从 512 B 增加至 1024 B 后，Free Heap 从 11560 B 降至 11048 B，差值正好为 512 B，与新增 Task Stack 容量一致。
+- 确认 1024 B Producer Stack 在当前最坏压力和错误日志路径下仍保留约 512 B 历史最小余量。
+- 压力实验结束后恢复 Final Baseline：
+  - Producer Period 恢复为 200 ms。
+  - 删除 Consumer 人工 500 ms 延迟。
+  - Queue Length 保持 8。
+  - Producer Stack 保持 1024 B。
+  - Consumer Stack 保持 1024 B。
+  - Queue Put Timeout 保持 0。
+  - Consumer 使用 `osWaitForever` 阻塞等待。
+- Final Baseline 完成稳定性验证：
+  - Sequence 持续连续。
+  - Queue Count 正常回到 0。
+  - 未观察到 Queue Full。
+  - 未观察到 Sequence Gap。
+  - HeartBeatTask 和 UARTTask 正常运行。
+  - Heap 和 Stack 保持稳定。
+- 创建并推送 `b78282c：feat: establish RTOS queue communication baseline`。
+- 提交后本地 `feature/m4-rtos-communication-baseline` 与远程同步。
+- 最终 Working Tree：clean。
+
+## 验收情况
+
+- M4 功能分支建立：通过。
+- 独立 M4 IPC 模块：通过。
+- 结构化 Queue Message：通过。
+- Queue Length = 8：通过。
+- Producer → Queue → Consumer 最小闭环：通过。
+- Queue 按值复制行为：通过。
+- Consumer 阻塞等待：通过。
+- 正常路径 Sequence 连续性：通过。
+- 正常路径 200 ms Producer 周期：通过。
+- Queue Full 人工压力验证：通过。
+- Queue Put timeout = 0 不阻塞失败行为：通过。
+- Drop Counter：通过。
+- Sequence Gap 检测：通过。
+- Queue 已入队数据在后续 Put Failure 情况下保持完整：通过。
+- Producer / Consumer 长期速率失衡导致 Queue 最终溢出：通过。
+- Task Stack 运行时测量：完成。
+- FreeRTOS Heap 运行时测量：完成。
+- 初始 Producer 512 B Stack 压力路径风险：已发现并修正。
+- Producer Stack 调整为 1024 B 后压力复测：通过。
+- M3 HeartBeat / UART / Debug Logger 基线保持：通过。
+- M4.1 Final Baseline 稳定性测试：通过。
+- M4.1 Queue 功能 checkpoint：`b78282c`，已创建并推送。
+
+## 未完成
+
+- M4 Task Notification / CMSIS-RTOS2 Thread Flags 实验尚未开始。
+- M4 Binary Semaphore 实验尚未开始。
+- Mutex 与 Binary Semaphore 的语义和实际行为对比尚未完成。
+- Ring Buffer 模块尚未实现。
+- 尚未验证 Task / ISR 通信边界。
+- M4 整体里程碑尚未关闭。
+- ADC、Timer、DMA 数据采集仍属于 M5，不在当前 Queue baseline 中引入。
+
+## 今日 Bug
+
+- 无需要归档到 `ERROR_LOG.md` 的正式固件 Bug。
+- Queue 压力测试中发现 M4ProducerTask 初始 512 B Stack 在 Queue Full + `LOG_WARN()` 错误日志路径下历史最小剩余空间降至 0 B，存在 Stack 安全余量不足风险。
+- 将 Producer Stack 调整为 1024 B 后，在相同压力条件下历史最小剩余 Stack 稳定为 512 B，问题已在进入 Final Baseline 前解决。
+- 压力测试产生的 Producer 50 ms 和 Consumer 500 ms 人工延迟配置已全部移除，没有进入最终稳定 baseline。
+
+## 今日学习
+
+- FreeRTOS Queue 不只是避免多个 Task 同时修改一个共享全局变量，更重要的是建立明确的数据交接和所有权边界。
+- `osMessageQueuePut()` 在当前结构体 Queue 中复制的是 `M4QueueMessage_t` 数据内容，而不是保存 Producer 局部变量地址；Producer 后续修改自己的局部对象不会修改已经入队的数据。
+- Queue 空时 Consumer 使用 `osWaitForever` 进入 Blocked 状态，可以避免无意义 Busy Polling，让 CPU 执行其他 Ready Task。
+- Queue Put timeout = 0 时，Queue 满会立即返回失败，适合显式观察 Backpressure 和 Drop，而不是让 Producer 阻塞等待空位。
+- Queue / Buffer 能吸收短时间突发和调度抖动，但不能解决长期 `Producer Throughput > Consumer Throughput` 的吞吐量失衡。
+- Queue Full 只会导致新的 Put 失败，不会破坏之前已经成功进入 Queue 的消息。
+- Consumer 不一定在第一次 Queue Full 时立即观察到 Sequence Gap，因为 Queue 中可能仍保存着 Drop 发生前已经成功入队的连续旧数据。
+- Sequence Gap 通常会在旧库存消费完、Consumer 开始读取 Drop 之后成功进入 Queue 的新数据时出现。
+- Queue Length 增大只能延后长期吞吐失衡下的溢出时间，不能从根本上消除溢出。
+- Task Stack 必须按最坏执行路径测量，不能只依据正常路径决定大小。
+- Queue Full 后的日志格式化、Logger Mutex 和阻塞 UART 发送路径会显著增加 Producer 的历史峰值 Stack 使用。
+- `osThreadGetStackSpace()` 反映任务历史最小剩余 Stack，因此压力场景出现 0 B 是重要的 Stack 风险信号。
+- FreeRTOS 动态创建 Task 时增加 Stack Size 会直接减少 FreeRTOS Heap；本次 Producer 增加 512 B Stack 后 Free Heap 实测也减少 512 B。
+- Debug Logger 本身会对实时实验时序产生一定扰动，因此正式高实时性 Producer 不应依赖高频同步日志作为主要错误处理机制。
+- `osDelay()` 当前只用于 M4 软件 Producer 实验，不应替代后续 M5 的 Hardware Timer → ADC → DMA 硬件采集链路。
+
+## 尚未理解
+
+- 尚未实际验证 CMSIS-RTOS2 Thread Flags 与底层 FreeRTOS Task Notification 的对应行为。
+- 尚未比较 Queue 和 Task Notification 在“传数据”与“只通知事件”场景中的成本和使用边界。
+- 尚未实际验证 Binary Semaphore 的同步语义。
+- 尚未完成 Mutex 与 Binary Semaphore 在资源所有权、优先级继承和事件同步方面的系统对比。
+- 尚未实现和验证无 RTOS 依赖的 Ring Buffer。
+- 尚未实际验证 ISR → Task 的安全通知路径。
+- 尚未进入指针消息、共享 Buffer 生命周期和更复杂数据所有权设计。
+
+## Git
+
+- Branch：`feature/m4-rtos-communication-baseline`
+- M4 起点：`c13b8e5`，Merge pull request #3 from wwu15768-byte/feature/m3-debug-infrastructure
+- M4 路线更新 checkpoint：`ed6c3a7`，`docs: update roadmap for expanded project milestones`
+- M4.1 Queue baseline checkpoint：`b78282c`，`feat: establish RTOS queue communication baseline`
+- Remote：`origin/feature/m4-rtos-communication-baseline`
+- 本地分支与远程分支同步。
+- Working Tree：clean。
+
+## 明天下一步
+
+继续 M4，不进入 ADC、DMA 或其他后续外设功能。下一步建立最小 Task Notification / CMSIS-RTOS2 Thread Flags 实验，重点验证“事件通知而非数据传输”的使用场景、阻塞等待行为和与 Queue 的职责边界；完成正常路径和必要边界验证后再进入 Binary Semaphore。

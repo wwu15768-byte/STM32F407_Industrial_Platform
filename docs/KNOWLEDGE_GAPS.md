@@ -283,3 +283,97 @@ M4 中实际建立 Queue 数据传递实验。
 ### 状态
 
 已掌握当前 M3 阶段所需基础。
+
+## KG-006：FreeRTOS Queue、数据所有权与 Backpressure
+
+### 来源
+
+M4.1 Queue Producer / Consumer、Queue Full、Sequence Gap 和 Task Stack 压力验证过程。
+
+### 当前理解
+
+已经通过真实 STM32F407VGT6 验证 CMSIS-RTOS2 Message Queue 的基本 Task → Task 数据传递行为。
+
+当前已经理解：
+
+- Queue 可以在 Producer 和 Consumer 之间建立明确的数据交接边界。
+- 当前 `M4QueueMessage_t` Queue 使用按值复制，`osMessageQueuePut()` 使用消息地址作为复制源，而不是将 Producer 局部变量指针保存进 Queue。
+- Producer 后续修改自己的局部 `message` 不会修改已经进入 Queue 的数据副本。
+- Consumer 使用 `osMessageQueueGet(..., osWaitForever)` 时，在 Queue 为空期间进入 Blocked，而不是持续 Busy Polling。
+- Queue Put timeout = 0 时，Queue 满会立即返回失败，适合明确暴露 Backpressure。
+- Queue Length 只能吸收有限时间的突发数据，不能解决长期 Producer Throughput 大于 Consumer Throughput。
+- Queue Full 只会使新的 Put 失败，不会破坏此前已经成功进入 Queue 的旧消息。
+- Consumer 不一定在第一次 Drop 时立即看到 Sequence Gap，因为 Queue 中可能仍有 Drop 发生前的连续旧库存。
+- 当旧库存消费完成后，Drop 会表现为 `expected_sequence != actual_sequence`。
+- Task Stack 必须根据最坏执行路径测量；正常路径余量充足不代表异常日志路径也安全。
+- Queue Full 后的同步日志格式化路径会显著增加 Producer Stack 峰值。
+- FreeRTOS 动态 Task Stack 会直接占用 FreeRTOS Heap。
+
+当前 M4.1 Final Baseline：
+
+- Queue Length：8。
+- Queue Item：12 B。
+- Producer Stack：1024 B。
+- Consumer Stack：1024 B。
+- Producer Period：200 ms。
+- Put Timeout：0。
+- Consumer Wait：`osWaitForever`。
+- Current Free Heap：11048 B。
+- Minimum Ever Free Heap：11048 B。
+
+### 缺少什么
+
+尚未实际掌握和验证：
+
+- Task Notification / CMSIS-RTOS2 Thread Flags。
+- Notification 的重复事件、bit flag 和计数行为。
+- Binary Semaphore。
+- Binary Semaphore 与 Mutex 的实际行为差异。
+- Queue 传指针时的生命周期和所有权管理。
+- ISR → Task Queue / Notification。
+- `FromISR` API 和必要的高优先级任务唤醒行为。
+- 多 Producer / 多 Consumer Queue 设计。
+- Ring Buffer 与 Queue 的职责区别。
+
+### 为什么重要
+
+M5 ADC + Timer + DMA、M6 UART DMA 和后续通信模块都会持续产生数据和事件。
+
+如果不能区分“结构化数据传递”、“轻量事件通知”、“同步”和“共享资源保护”，容易出现错误的 RTOS 对象选择、数据生命周期错误、任务长期阻塞或无界数据积压。
+
+### 学习优先级
+
+当前 Queue 基础已经完成。
+
+下一优先级是 Task Notification / CMSIS-RTOS2 Thread Flags，然后是 Binary Semaphore 与 Mutex 对比，最后进入 Ring Buffer。
+
+### 学习任务
+
+- 建立最小 Task → Task Notification 实验。
+- 比较 Queue 和 Notification 的资源与语义差异。
+- 建立 Binary Semaphore 同步实验。
+- 使用现有 Debug Logger Mutex 对比资源所有权语义。
+- 实现独立于 RTOS 的 Ring Buffer。
+- M4 后期再验证 ISR → Task 边界。
+
+### 小实验
+
+已完成：
+
+- Queue Producer → Consumer 正常路径。
+- 小结构体按值传递。
+- Consumer Blocking Receive。
+- Queue Full。
+- Backpressure。
+- Drop Counter。
+- Sequence Gap。
+- Producer Stack 正常路径与压力路径对比。
+- Producer Stack 512 B → 1024 B 调整与复测。
+- FreeRTOS Heap 重新测量。
+- M4.1 Final Baseline 稳定性验证。
+
+### 状态
+
+Queue 基础已掌握。
+
+Task Notification、Binary Semaphore、Ring Buffer 和 ISR / Task 边界仍待验证。

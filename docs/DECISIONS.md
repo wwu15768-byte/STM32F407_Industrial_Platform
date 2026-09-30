@@ -103,3 +103,23 @@
     - CAN 当前只规划 CAN 2.0 / bxCAN 基础，不加入 CAN FD、UDS、J1939 或 CANopen。
     - 第一版 Bootloader 不加入 Secure Boot、加密、数字签名、双 Bank、A/B Firmware 或网络 OTA。
     - Linux 只作为两年内逐步补充的开发与用户态基础能力，不进入 STM32 项目里程碑，也不加入 Linux Kernel 源码学习。
+
+## DEC-20260930-01：M4 应用层 IPC 独立模块化并优先使用按值 Queue
+
+- 状态：已接受
+- 决策：
+    - M4 Task 间通信与同步实验集中在独立 `m4_ipc` 应用模块中，不继续将具体通信逻辑堆入 CubeMX 生成的 `freertos.c`。
+    - `freertos.c` 主要负责 RTOS 初始化入口和调用 `M4Ipc_Init()`。
+    - M4 应用层 RTOS 对象优先使用 CMSIS-RTOS2 API 在用户模块中程序化创建。
+    - 用户模块源码通过根目录 `CMakeLists.txt` 加入构建，不将用户源码长期维护在 CubeMX 生成的 `cmake/stm32cubemx/CMakeLists.txt` 中。
+    - 第一版结构化 Queue 使用小型结构体按值传递，不使用指针消息。
+- 原因：
+    - 随着 Queue、Notification、Semaphore、Ring Buffer 以及后续采集任务增加，如果所有实现继续堆入 `freertos.c`，应用层职责会迅速混杂。
+    - 独立模块能够保持 CubeMX 生成代码与用户业务逻辑边界清晰。
+    - 程序化创建 RTOS 对象便于直接理解和控制 CMSIS-RTOS2 对象属性。
+    - 第一版 Queue 使用按值结构体能够避免过早引入 Buffer 生命周期和指针所有权问题。
+- 影响：
+    - M4 后续 Notification 和 Semaphore 实验继续优先保持在应用模块边界内。
+    - Ring Buffer 作为通用数据结构应进一步独立为单独模块，而不是与 RTOS IPC 实现耦合。
+    - 后续如果 M5/M6 出现新的长期业务模块，可继续按照“生成代码负责硬件/RTOS入口，用户模块负责业务逻辑”的方式扩展。
+    - 当确实需要传递大型 Buffer 指针时，必须重新建立明确的 Buffer 生命周期和所有权规则，不能直接套用当前按值 Queue 假设。
