@@ -325,55 +325,146 @@ M4.1 Queue Producer / Consumer、Queue Full、Sequence Gap 和 Task Stack 压力
 
 尚未实际掌握和验证：
 
-- Task Notification / CMSIS-RTOS2 Thread Flags。
-- Notification 的重复事件、bit flag 和计数行为。
 - Binary Semaphore。
 - Binary Semaphore 与 Mutex 的实际行为差异。
 - Queue 传指针时的生命周期和所有权管理。
 - ISR → Task Queue / Notification。
-- `FromISR` API 和必要的高优先级任务唤醒行为。
+- ISR-safe 通信 API 和必要的高优先级任务唤醒行为。
 - 多 Producer / 多 Consumer Queue 设计。
 - Ring Buffer 与 Queue 的职责区别。
-
-### 为什么重要
-
-M5 ADC + Timer + DMA、M6 UART DMA 和后续通信模块都会持续产生数据和事件。
-
-如果不能区分“结构化数据传递”、“轻量事件通知”、“同步”和“共享资源保护”，容易出现错误的 RTOS 对象选择、数据生命周期错误、任务长期阻塞或无界数据积压。
 
 ### 学习优先级
 
 当前 Queue 基础已经完成。
 
-下一优先级是 Task Notification / CMSIS-RTOS2 Thread Flags，然后是 Binary Semaphore 与 Mutex 对比，最后进入 Ring Buffer。
+Task → Task Thread Flags 基础已经通过 M4.2 实验验证，并单独记录在 KG-007。
+
+下一优先级是 Binary Semaphore 与 Mutex 对比，然后进入 Ring Buffer，M4 后期再验证 ISR → Task 边界。
 
 ### 学习任务
 
-- 建立最小 Task → Task Notification 实验。
-- 比较 Queue 和 Notification 的资源与语义差异。
-- 建立 Binary Semaphore 同步实验。
-- 使用现有 Debug Logger Mutex 对比资源所有权语义。
+- 建立 Binary Semaphore Task → Task 同步实验。
+- 使用现有 Debug Logger Mutex 对比事件同步与资源所有权保护语义。
 - 实现独立于 RTOS 的 Ring Buffer。
-- M4 后期再验证 ISR → Task 边界。
-
-### 小实验
-
-已完成：
-
-- Queue Producer → Consumer 正常路径。
-- 小结构体按值传递。
-- Consumer Blocking Receive。
-- Queue Full。
-- Backpressure。
-- Drop Counter。
-- Sequence Gap。
-- Producer Stack 正常路径与压力路径对比。
-- Producer Stack 512 B → 1024 B 调整与复测。
-- FreeRTOS Heap 重新测量。
-- M4.1 Final Baseline 稳定性验证。
+- 验证 Ring Buffer 满、空和回绕边界。
+- M4 后期验证 ISR → Task Queue / Thread Flags 边界。
+- 后续实际需要传递大型 Buffer 指针时再建立明确的生命周期和所有权规则。
 
 ### 状态
 
 Queue 基础已掌握。
 
-Task Notification、Binary Semaphore、Ring Buffer 和 ISR / Task 边界仍待验证。
+Thread Flags Task → Task 基础见 KG-007。
+
+Binary Semaphore、Ring Buffer 和 ISR / Task 边界仍待验证。
+
+## KG-007：CMSIS-RTOS2 Thread Flags、事件通知与重复事件合并
+
+### 来源
+
+M4.2 Task → Task Thread Flags 正常通知、重复 Flag bit 合并和 Final Baseline 稳定性验证过程。
+
+### 当前理解
+
+已经通过真实 STM32F407VGT6 验证 CMSIS-RTOS2 Thread Flags 的 Task → Task 基础行为。
+
+当前已经理解：
+
+- Thread Flags 是绑定在线程上的轻量事件状态机制，应用层不需要像 Message Queue 一样额外创建独立消息容器。
+- `osThreadFlagsWait(..., osWaitForever)` 可以让 Work 在没有事件时进入 Blocked 状态。
+- `osThreadFlagsSet()` 设置对应事件位后，等待该事件的 Work 能够恢复执行。
+- 当前正常配置下，M4EventTask 每 1000 ms Set 一次 `M4_EVENT_WORK_READY`，M4WorkTask 能够稳定保持 Set Count 与 Receive Count 1:1。
+- Thread Flags 不用于复制 `M4QueueMessage_t` 这类结构化数据。
+- Queue 负责保存有限数量的独立消息，Thread Flags 更适合表达“某项工作待处理”。
+- 同一个 Flag bit 在 Work 获得执行机会前被重复 Set 时不会累计多个独立事件。
+- 已通过人工优先级实验稳定观察到：
+  - 33 次相同 Flag Set。
+  - Work 实际消费 11 次。
+- 对同一个 bit 重复 Set 的本质是保持该 bit 为 Pending 状态，而不是建立 Event Count。
+- 因此 Thread Flags 不能被直接当作无损事件计数器。
+- 如果未来不同事件必须被区分，可以使用不同 Flag bit；如果同类事件的每一次发生都必须保存，则需要 Queue、Counting Semaphore 或其他具有计数 / 缓冲语义的机制。
+- Debug Logger 输出顺序只能作为功能观测证据，不应该被当作 RTOS 内核精确调度 Trace。
+
+当前 M4.2 Final Baseline：
+
+- M4EventTask：
+  - Priority：`osPriorityNormal`
+  - Stack：1024 B
+  - Period：1000 ms
+- M4WorkTask：
+  - Priority：`osPriorityNormal`
+  - Stack：1024 B
+- Event Flag：
+  - `M4_EVENT_WORK_READY`
+- Work：
+  - `osThreadFlagsWait(..., osWaitForever)`
+- Current Free Heap：8776 B。
+- Minimum Ever Free Heap：8776 B。
+- M4EventTask 历史最小剩余 Stack：528 B。
+- M4WorkTask 历史最小剩余 Stack：528 B。
+- NRST ×3：通过。
+- Power-cycle ×3：通过。
+
+### 缺少什么
+
+尚未实际掌握和验证：
+
+- ISR → Task Thread Flags。
+- CMSIS-RTOS2 Thread Flags 在 ISR 场景中的具体限制和安全调用边界。
+- 多个不同 Flag bit 同时 Pending 时的完整处理策略。
+- `osFlagsWaitAny` 与更复杂 Flag 组合的工程应用。
+- DMA Half Complete / Full Complete 使用不同 Flag bit 后的实际行为。
+- 事件通知与 Buffer Ownership 同时存在时的最终数据采集架构。
+- CMSIS-RTOS2 Thread Flags wrapper 与 FreeRTOS 底层 Notification 实现细节的更深入对应关系。
+
+### 为什么重要
+
+M5 ADC + Timer + DMA 和后续 UART DMA 都会产生“数据已经准备好”的异步事件。
+
+如果把 Thread Flags 错误理解为事件计数器，当 Producer / ISR 产生事件的速度超过 Consumer Task 的处理速度时，可能错误地认为每一次事件都会被保留，从而造成不可见的数据丢失或 Buffer 状态错误。
+
+必须明确区分：
+
+- Event State：某项工作需要处理。
+- Event Count：事件实际发生了多少次。
+- Data：需要处理的数据内容。
+- Buffer Ownership：当前哪一个执行上下文拥有对应 Buffer。
+
+### 学习优先级
+
+Task → Task Thread Flags 基础已经完成。
+
+下一阶段优先完成 Binary Semaphore 与 Mutex 对比。
+
+ISR → Task Thread Flags 和 DMA Buffer 事件设计在 M4 后期与 M5 数据采集阶段继续深化。
+
+### 学习任务
+
+- M4.3 建立 Binary Semaphore Give / Take 实验。
+- 对比 Thread Flags、Binary Semaphore、Mutex 和 Queue 的职责。
+- M4 后期设计一个最小 ISR → Task 通知实验。
+- M5 ADC DMA 阶段分别考虑 Half Ready 和 Full Ready 事件。
+- 在正式使用 DMA Buffer 前建立明确的数据状态与 Buffer Ownership 模型。
+
+### 小实验
+
+已完成：
+
+- Task → Task 单 Flag 正常通知。
+- `osThreadFlagsWait(..., osWaitForever)` 阻塞等待。
+- 正常路径 11 Sets → 11 Receives。
+- 相同 Flag bit 三连 Set Burst。
+- 33 Sets → 11 Receives 事件合并验证。
+- Event Producer 临时高优先级可重复实验。
+- Thread Flags 与 Queue 并行运行。
+- 新增 Task Stack 与 FreeRTOS Heap 重新测量。
+- M4.2 Final Baseline NRST ×3。
+- M4.2 Final Baseline Power-cycle ×3。
+
+### 状态
+
+Task → Task Thread Flags 基础已掌握。
+
+相同 Flag bit 的事件合并语义已经通过真实硬件实验验证。
+
+ISR → Task、多 Flag 和 DMA Buffer Ownership 仍待后续验证。

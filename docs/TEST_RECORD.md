@@ -950,3 +950,189 @@
   - 同步 Debug Logger 会对具体任务时序产生扰动。
   - 当前结果不能代表后续 ADC DMA 实际吞吐能力。
   - 尚未验证 ISR → Task Queue 或 Task Notification。
+
+## TEST-20261005-01：M4 Task → Task Thread Flags 正常通知基线验证
+
+- 目标：
+  - 验证 CMSIS-RTOS2 Thread Flags 能够完成最小 Task → Task 事件通知。
+  - 验证 Work 在没有事件时可以阻塞等待。
+  - 验证事件到达后 Work 能够正常被唤醒。
+  - 验证 Thread Flags 与已经存在的 Queue 链路能够同时稳定运行。
+  - 重新测量新增两个 Task 后的 Task Stack 和 FreeRTOS Heap。
+
+- 配置：
+  - Event Flag：
+    - `M4_EVENT_WORK_READY = (1UL << 0)`
+  - M4EventProducerTask：
+    - Priority：`osPriorityNormal`
+    - Stack：1024 B
+    - Period：1000 ms
+  - M4WorkTask：
+    - Priority：`osPriorityNormal`
+    - Stack：1024 B
+    - Wait：`osThreadFlagsWait(M4_EVENT_WORK_READY, osFlagsWaitAny, osWaitForever)`
+  - 原 M4 Queue baseline 保持：
+    - Producer Period：200 ms
+    - Queue Length：8
+    - Queue Put Timeout：0
+    - Consumer：`osWaitForever`
+
+- 方法：
+  - M4EventProducerTask 每 1000 ms 调用一次 `osThreadFlagsSet()`。
+  - M4WorkTask 使用 `osThreadFlagsWait(..., osWaitForever)` 等待事件。
+  - 分别记录 Set Count 和 Receive Count。
+  - 同时观察原有 M4 Queue Sequence、Queue Count、Heartbeat、UART、Task Stack 和 FreeRTOS Heap。
+
+- 实际结果：
+  - 连续观察到：
+    ```text
+    [I][M4F] set event, count=1 flags=0x00000001
+    [I][M4F] event received, count=1 flags=0x00000001
+
+    [I][M4F] set event, count=2 flags=0x00000001
+    [I][M4F] event received, count=2 flags=0x00000001
+    ```
+  - 正常路径持续至：
+    ```text
+    Set Count = 11
+    Receive Count = 11
+    ```
+  - 正常路径保持 11 Sets → 11 Receives。
+  - Work 在没有事件时通过 `osThreadFlagsWait(..., osWaitForever)` 阻塞等待。
+  - 原 M4 Queue 同时持续正常运行。
+  - Queue Sequence 保持连续。
+  - Queue Count 正常回到 0。
+  - 未观察到 Queue Full 或 Sequence Gap。
+  - Final Baseline 资源数据：
+    ```text
+    HeartFree=384 B
+    UARTFree=504 B
+    M4ProdFree=808 B
+    M4ConsFree=496 B
+    M4EvtFree=528 B
+    M4WorkFree=528 B
+    Heap=8776 B
+    MinHeap=8776 B
+    ```
+  - 相比 M4.1 Final Baseline：
+    ```text
+    Free Heap: 11048 B -> 8776 B
+    ```
+  - 新增两个 1024 B Task 后 FreeRTOS Heap 额外减少 2272 B，其中包括任务 Stack 和对应的 RTOS Task 管理开销。
+  - Current Free Heap 与 Minimum Ever Free Heap 保持一致，没有观察到持续下降。
+
+- 结论：
+  - PASS。
+  - CMSIS-RTOS2 Thread Flags 已能够完成稳定的 Task → Task 轻量事件通知。
+  - Work 可以在无事件期间阻塞，在事件到达后恢复执行。
+  - 当前正常低速通知条件下 Set 和 Receive 保持 1:1。
+  - Thread Flags 与 Queue 可以在当前 M4 应用模块中并行稳定工作。
+  - Queue 继续负责结构化数据传递，Thread Flags 用于轻量事件通知，两者职责已经能够明确区分。
+
+- 边界：
+  - 本测试只验证 Task → Task Thread Flags。
+  - 本测试只使用一个 Flag bit。
+  - 未验证 ISR → Task。
+  - 未验证多个不同 Flag bit 同时 Pending。
+  - 正常路径 1:1 不代表重复同一 Flag bit 时事件次数一定能够保留，该行为由单独压力实验验证。
+  - Debug Logger 输出只能作为功能证据，不代表 RTOS 内核精确调度时间线。
+
+## TEST-20261005-02：M4 Thread Flag 重复事件合并与 Final Baseline 稳定性验证
+
+- 目标：
+  - 验证同一个 Thread Flag bit 在 Work 获得执行机会前被重复 Set 时的实际行为。
+  - 确认 Thread Flags 是否能够像 Queue 一样累计多个相同事件。
+  - 明确 Thread Flags 与 Queue 在事件状态和消息计数语义上的差异。
+  - 恢复正常配置后验证 M4.2 Final Baseline 的复位和断电启动稳定性。
+
+- 压力配置：
+  - M4EventProducerTask：
+    - 临时 Priority：`osPriorityAboveNormal`
+    - Stack：1024 B
+  - M4WorkTask：
+    - Priority：`osPriorityNormal`
+    - Stack：1024 B
+  - 每个 Burst：
+    - 连续调用 3 次 `osThreadFlagsSet(M4_EVENT_WORK_READY)`。
+    - 3 次 Set 之间不主动阻塞。
+  - Producer 完成一轮 Burst 后才重新进入 Delay。
+
+- 方法：
+  - 临时提高 M4EventProducerTask Priority，使第一次 Set 将 Work 唤醒为 Ready 后，Event Producer 仍能够继续执行。
+  - 在 Work 真正获得 CPU 前连续设置三次相同的 `M4_EVENT_WORK_READY` bit。
+  - 分别累计 `total_set` 和 Work `receive_count`。
+  - 同时观察 Queue、Stack 和 Heap。
+  - 实验结束后删除 Burst 逻辑并恢复两个 Event Task 为正常优先级。
+
+- 实际结果：
+  - 实际观察到：
+    ```text
+    [I][M4F] burst=1 total_set=3
+    [I][M4F] event received, count=1 flags=0x00000001
+
+    [I][M4F] burst=2 total_set=6
+    [I][M4F] event received, count=2 flags=0x00000001
+
+    ...
+
+    [I][M4F] burst=10 total_set=30
+    [I][M4F] event received, count=10 flags=0x00000001
+
+    [I][M4F] burst=11 total_set=33
+    [I][M4F] event received, count=11 flags=0x00000001
+    ```
+  - 最终实际关系：
+    ```text
+    Total Set = 33
+    Receive   = 11
+    ```
+  - 每轮三个相同 Flag Set 最终只形成一次 Work 的有效事件消费。
+  - Burst 压力路径资源稳定为：
+    ```text
+    HeartFree=384 B
+    UARTFree=504 B
+    M4ProdFree=808 B
+    M4ConsFree=496 B
+    M4EvtFree=520 B
+    M4WorkFree=528 B
+    Heap=8776 B
+    MinHeap=8776 B
+    ```
+  - Burst 路径相比正常路径，M4EventProducerTask 历史最小剩余 Stack 从 528 B 降至 520 B。
+  - Heap 与 MinHeap 仍保持 8776 B。
+  - 原 M4 Queue 在整个实验中继续正常运行。
+  - 未观察到 Queue Full、Sequence Gap、Hang 或 HardFault。
+
+- Final Baseline 恢复：
+  - M4EventProducerTask Priority 恢复为 `osPriorityNormal`。
+  - 删除每轮连续 3 次 Set 的 Burst 测试逻辑。
+  - 恢复每 1000 ms 单次 Set。
+  - Final Baseline 稳定资源恢复为：
+    ```text
+    HeartFree=384 B
+    UARTFree=504 B
+    M4ProdFree=808 B
+    M4ConsFree=496 B
+    M4EvtFree=528 B
+    M4WorkFree=528 B
+    Heap=8776 B
+    MinHeap=8776 B
+    ```
+  - NRST ×3：全部 PASS。
+  - Power-cycle ×3：全部 PASS。
+  - 六次重新启动后 Queue、Thread Flags、Heartbeat、UART、Stack 和 Heap 均正常恢复。
+
+- 结论：
+  - PASS。
+  - 同一个 Thread Flag bit 在被 Work 清除 / 消费之前重复 Set，不会形成多个独立排队事件。
+  - Thread Flags 表达的是 Pending Event State，而不是无损 Event Count。
+  - Thread Flags 适合通知“某项工作需要处理”，但不能在需要保存每一次同类事件次数时直接替代 Queue 或计数型同步机制。
+  - 后续 M5 ADC DMA 设计不能假设多个相同 DMA 事件通过单一 Flag bit 能够无损累计。
+  - M4.2 Final Baseline 已通过重复复位和完全断电重新启动验证。
+
+- 边界：
+  - 本实验只验证相同单一 Flag bit 的重复 Set。
+  - 尚未验证多个不同 Flag bit 同时 Pending。
+  - 尚未验证 ISR context 中设置 Thread Flags。
+  - 当前测试使用人为优先级关系确保事件合并现象可稳定复现。
+  - 本测试用于验证 RTOS 语义，不代表后续 ADC DMA 的最终生产架构。

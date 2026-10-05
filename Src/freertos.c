@@ -179,16 +179,19 @@ void StartUARTTask(void *argument)
       heap_free = xPortGetFreeHeapSize();
       heap_min_free = xPortGetMinimumEverFreeHeapSize();
 
-      LOG_INFO( "SYS",
-                "HeartFree=%lu B UARTFree=%lu B "
-                "M4ProdFree=%lu B M4ConsFree=%lu B "
-                "Heap=%lu B MinHeap=%lu B",
-                (unsigned long)heartbeat_stack_free,
-                (unsigned long)uart_stack_free,
-                (unsigned long)M4Ipc_GetProducerStackFree(),
-                (unsigned long)M4Ipc_GetConsumerStackFree(),
-                (unsigned long)heap_free,
-                (unsigned long)heap_min_free);
+      LOG_INFO("SYS",
+         "HeartFree=%lu B UARTFree=%lu B M4ProdFree=%lu B M4ConsFree=%lu B",
+         (unsigned long)heartbeat_stack_free,
+         (unsigned long)uart_stack_free,
+         (unsigned long)M4Ipc_GetProducerStackFree(),
+         (unsigned long)M4Ipc_GetConsumerStackFree());
+
+      LOG_INFO("SYS",
+         "M4EvtFree=%lu B M4WorkFree=%lu B Heap=%lu B MinHeap=%lu B",
+         (unsigned long)M4Ipc_GetEventProducerStackFree(),
+         (unsigned long)M4Ipc_GetEventWorkStackFree(),
+         (unsigned long)heap_free,
+         (unsigned long)heap_min_free);
     }
     osDelay(1000U);
   }

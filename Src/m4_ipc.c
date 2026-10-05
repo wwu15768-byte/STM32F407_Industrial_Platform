@@ -1,15 +1,23 @@
 #include "m4_ipc.h"
 
+#include "cmsis_os2.h"
 #include "debug_log.h"
+#include <stdint.h>
 
 #define M4_QUEUE_LENGTH               8U
 #define M4_PRODUCER_PERIOD_MS         200U
 #define M4_QUEUE_PUT_TIMEOUT_TICKS    0U
 
+#define M4_EVENT_WORK_READY           (1UL << 0)
+#define M4_EVENT_PRODUCER_PERIOD_MS   1000U
+
 static osMessageQueueId_t s_m4_queue = NULL;
 
 static osThreadId_t s_m4_producer_task = NULL;
 static osThreadId_t s_m4_consumer_task = NULL;
+
+static osThreadId_t s_m4_event_work_task = NULL;
+static osThreadId_t s_m4_event_producer_task = NULL;
 
 static const osMessageQueueAttr_t s_m4_queue_attributes =
 {
@@ -30,9 +38,24 @@ static const osThreadAttr_t s_m4_consumer_attributes =
     .priority = osPriorityNormal
 };
 
+static const osThreadAttr_t s_m4_event_work_attributes =
+{
+    .name = "M4WorkTask",
+    .stack_size = 1024U,
+    .priority = osPriorityNormal
+};
+
+static const osThreadAttr_t s_m4_event_producer_attributes =
+{
+    .name = "M4EventTask",
+    .stack_size = 1024U,
+    .priority = osPriorityNormal
+};
+
 static void StartM4ProducerTask(void *argument);
 static void StartM4ConsumerTask(void *argument);
-
+static void StartM4EventWorkTask(void *argument);
+static void StartM4EventProducerTask(void *argument);
 
 M4IpcStatus_t M4Ipc_Init(void)
 {
@@ -61,6 +84,24 @@ M4IpcStatus_t M4Ipc_Init(void)
     if (s_m4_consumer_task == NULL)
     {
         return M4_IPC_ERROR_CONSUMER_CREATE;
+    }
+
+    s_m4_event_producer_task = osThreadNew(StartM4EventProducerTask,
+                                     NULL,
+                                     &s_m4_event_producer_attributes);
+
+    if (s_m4_event_producer_task == NULL)
+    {
+        return M4_IPC_ERROR_EVENT_PRODUCER_CREATE;
+    }
+
+    s_m4_event_work_task = osThreadNew(StartM4EventWorkTask,
+                                     NULL,
+                                     &s_m4_event_work_attributes);
+
+    if (s_m4_event_work_task == NULL)
+    {
+        return M4_IPC_ERROR_EVENT_WORK_CREATE;
     }
 
     return M4_IPC_OK;
@@ -135,6 +176,69 @@ static void StartM4ConsumerTask(void *argument)
     }
 }
 
+static void StartM4EventProducerTask(void *argument)
+{
+    uint32_t event_count = 0;
+
+    (void)argument;
+
+    for(;;)
+    {
+        osDelay(M4_EVENT_PRODUCER_PERIOD_MS);
+
+        uint32_t flags = osThreadFlagsSet(  s_m4_event_work_task,
+                                            M4_EVENT_WORK_READY);
+
+        if((flags & osFlagsError) != 0U)
+        {
+            LOG_INFO("M4F",
+                     "set failed, result=0x%08lX",
+                     (unsigned long)flags);
+        }
+        else
+        {
+            event_count ++;
+
+            LOG_INFO("M4F",
+                     "set event, count=%lu flags=0x%08lX",
+                     (unsigned long)event_count,
+                     (unsigned long)flags);
+
+
+        }
+    }
+}
+
+static void StartM4EventWorkTask(void *argument)
+{
+    uint32_t receive_count = 0;
+
+    (void)argument;
+
+    for(;;)
+    {
+        uint32_t flags = osThreadFlagsWait( M4_EVENT_WORK_READY,
+                                            osFlagsWaitAny,
+                                            osWaitForever);
+
+        if((flags & osFlagsError) != 0U) /* 错误码检验 */
+        {
+            LOG_INFO("M4F",
+                     "wait failed, result=0x%08lX",
+                     (unsigned long)flags);
+        }
+        else
+        {
+            receive_count ++;
+
+            LOG_INFO("M4F",
+                     "event received, count=%lu flags=0x%08lX",
+                     (unsigned long)receive_count,
+                     (unsigned long)flags);
+        }
+    }
+}
+
 uint32_t M4Ipc_GetProducerStackFree(void)
 {
     if (s_m4_producer_task == NULL)
@@ -153,4 +257,24 @@ uint32_t M4Ipc_GetConsumerStackFree(void)
     }
 
     return osThreadGetStackSpace(s_m4_consumer_task);
+}
+
+uint32_t M4Ipc_GetEventProducerStackFree(void)
+{
+    if (s_m4_event_producer_task == NULL)
+    {
+        return 0U;
+    }
+
+    return osThreadGetStackSpace(s_m4_event_producer_task);
+}
+
+uint32_t M4Ipc_GetEventWorkStackFree(void)
+{
+    if(s_m4_event_work_task == NULL)
+    {
+        return 0U;
+    }
+
+    return osThreadGetStackSpace(s_m4_event_work_task);
 }

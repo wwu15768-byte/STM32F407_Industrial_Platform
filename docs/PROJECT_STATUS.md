@@ -3,17 +3,27 @@
 > 唯一回答：项目现在在哪？
 > 更新时机：项目状态发生明显变化时。
 
-更新时间：2026-10-01
+更新时间：2026-10-05
 
 ## Current Milestone
 
 M4：RTOS 通信、同步和数据缓冲。M0～M3 已完成，M4 为当前阶段。
 
-M4.1 Queue Producer / Consumer 基线已经完成，最新功能 checkpoint：`b78282c`，`feat: establish RTOS queue communication baseline`。。当前准备继续 M4.2 Task Notification / CMSIS-RTOS2 Thread Flags，不进入 M5。
+M4.1 Queue Producer / Consumer baseline 已完成。
+
+M4.2 Task Notification / CMSIS-RTOS2 Thread Flags 已完成真实板级正常通知、重复事件合并、运行时资源和复位稳定性验证。
+
+当前下一步为 M4.3 Binary Semaphore，不进入 M5。
 
 ## Current Goal
 
-在已经完成的结构化 Queue Producer / Consumer 基线上继续推进 M4，下一步通过 Task Notification / CMSIS-RTOS2 Thread Flags 建立轻量事件通知实验，并与 Queue 的“数据传递”职责进行对比。之后再进入 Binary Semaphore、Mutex 语义对比和 Ring Buffer。M4 完成前不提前实现 ADC + Timer + DMA、UART DMA、RS485、Modbus、CAN、Bootloader 或 Watchdog。
+在已经完成 Queue 数据传递和 Thread Flags 轻量事件通知基础上继续推进 M4。
+
+下一步建立 Binary Semaphore 最小同步实验，并与 M3 Debug Logger 已经使用的 Mutex 对比“事件同步”与“共享资源所有权保护”的职责差异。
+
+之后进入 Ring Buffer 和 ISR → Task 通信边界验证。
+
+M4 完成并形成稳定关闭 checkpoint 前，不提前实现 ADC + Timer + DMA、UART DMA、RS485、Modbus、CAN、Bootloader 或 Watchdog。
 
 ## Completed
 
@@ -167,10 +177,55 @@ M4.1 Queue Producer / Consumer 基线已经完成，最新功能 checkpoint：`b
 - 未观察到 Queue Full、Sequence Gap、Heap 持续下降、Hang 或 HardFault。
 - M3 HeartBeatTask、UARTTask 和 Debug Logger 在 M4.1 实验期间持续正常运行。
 - 已形成并推送 `b78282c：feat: establish RTOS queue communication baseline`。
+- 已建立 M4.2 Task → Task CMSIS-RTOS2 Thread Flags 通知链路。
+- 已建立 `M4EventTask` 和 `M4WorkTask`。
+- 已定义 `M4_EVENT_WORK_READY` 单一事件位。
+- M4EventTask Final Baseline：
+  - Priority：`osPriorityNormal`。
+  - Stack：1024 B。
+  - Period：1000 ms。
+- M4WorkTask Final Baseline：
+  - Priority：`osPriorityNormal`。
+  - Stack：1024 B。
+  - 使用 `osThreadFlagsWait(..., osFlagsWaitAny, osWaitForever)` 阻塞等待。
+- 已验证 Work 在没有事件时阻塞，在 Event Producer Set Flag 后正常被唤醒。
+- 正常路径已验证 11 Sets → 11 Receives。
+- 原 M4 Queue 在 Thread Flags 实验期间继续保持 Sequence 连续和正常消费。
+- 已完成人工重复同一 Flag bit 的事件合并实验。
+- Burst 实验中临时提高 Event Producer Priority，并在 Work 运行前连续 Set 相同 Flag 3 次。
+- 实际观察到 33 Sets → 11 Receives。
+- 已确认相同 Thread Flag bit 的重复 Set 表达 Pending State，不保存独立事件次数。
+- 已确认 Thread Flags 不能作为无损事件计数器使用。
+- 已明确当前职责边界：
+  - Queue：结构化数据传递和有限消息缓冲。
+  - Thread Flags：轻量事件状态通知。
+- Burst 压力路径中 M4EventTask 历史最小剩余 Stack 为 520 B。
+- Final Baseline 中：
+  - HeartBeatTask 历史最小剩余 Stack：384 B。
+  - UARTTask 历史最小剩余 Stack：504 B。
+  - M4ProducerTask 历史最小剩余 Stack：808 B。
+  - M4ConsumerTask 历史最小剩余 Stack：496 B。
+  - M4EventTask 历史最小剩余 Stack：528 B。
+  - M4WorkTask 历史最小剩余 Stack：528 B。
+  - FreeRTOS Current Free Heap：8776 B。
+  - FreeRTOS Minimum Ever Free Heap：8776 B。
+- M4.2 Final Baseline 已完成 NRST ×3。
+- M4.2 Final Baseline 已完成完全断电重新上电 ×3。
+- 六次重新启动后 Queue、Thread Flags、Heartbeat、UART、Stack 和 Heap 均能够稳定恢复。
+- 未观察到 HardFault、Hang 或 Heap 持续下降。
+- M4.2 最新功能 checkpoint：`<07cf819>`，`feat: establish RTOS thread flag notification baseline`。
 
 ## In Progress
 
-M4.1 Queue Producer / Consumer checkpoint 已完成。当前准备进入 M4.2 Task Notification / CMSIS-RTOS2 Thread Flags，重点验证轻量事件通知、阻塞等待和任务唤醒行为，并与 Queue 的结构化数据传递职责进行对比。Binary Semaphore、Mutex 对比和 Ring Buffer 尚未开始。
+M4.1 Queue Producer / Consumer 已完成。
+
+M4.2 Task Notification / CMSIS-RTOS2 Thread Flags 已完成正常通知、阻塞等待、相同 Flag bit 事件合并、资源测量以及 Final Baseline 稳定性验证。
+
+当前准备进入 M4.3 Binary Semaphore。
+
+下一阶段重点验证 Give / Take、阻塞等待和任务唤醒，并与已有 Debug Logger Mutex 对比同步语义和资源所有权语义。
+
+Ring Buffer 和 ISR → Task 边界尚未开始。
 
 ## Blocked
 
@@ -190,45 +245,48 @@ Task Notification、Binary Semaphore、Ring Buffer、ADC + Timer + DMA、UART DM
 
 - 当前 Branch：`feature/m4-rtos-communication-baseline`。
 - Upstream：`origin/feature/m4-rtos-communication-baseline`。
-- 当前 HEAD：`b78282c`，`feat: establish RTOS queue communication baseline`。
+- M4.2 最新已验证功能 checkpoint：`<07cf819>`，`feat: establish RTOS thread flag notification baseline`。
+- M4.1 文档 checkpoint：`22d25bd`，`docs: record M4 queue baseline verification`。
+- M4.1 Queue 功能 checkpoint：`b78282c`，`feat: establish RTOS queue communication baseline`。
 - M4 路线更新 checkpoint：`ed6c3a7`，`docs: update roadmap for expanded project milestones`。
 - M4 起点：`c13b8e5`，M3 Merge Commit。
 - 当前 `main` / `origin/main` 位于 `c13b8e5`，包含完整 M0～M3。
-- 当前 M4 功能分支已经推送并与远程同步。
-- Working Tree：clean。
+- 本轮 M4.2 文档完成并提交后应保持 Working Tree clean。
 
 ## Last Verified Function
 
-- M4.1 RTOS Queue Communication Baseline 已经通过 STM32F407VGT6 真实硬件验证：
-  - `M4ProducerTask` 能够周期生成 `M4QueueMessage_t`。
-  - `M4DataQueue` Length = 8。
-  - Queue Item Size = 12 B。
-  - 消息采用结构体按值复制，不使用指针传递。
-  - `M4ConsumerTask` 使用 `osMessageQueueGet(..., osWaitForever)` 阻塞等待消息。
-  - Final Baseline Producer Period = 200 ms。
-  - Queue Put Timeout = 0。
-  - 正常路径 Sequence 连续。
-  - 正常路径未观察到 Queue Full。
-  - 正常路径未观察到 Sequence Gap。
-  - 已人工验证 Producer 长期快于 Consumer 时 Queue Occupancy 会增加并最终达到 Full。
-  - Queue Full 后 Put 能立即失败并增加 Drop Counter。
-  - Queue 中已经成功入队的数据不会因后续 Put Failure 被破坏。
-  - Consumer 能在旧库存消耗后检测到 Sequence Gap。
-  - M4ProducerTask Stack 已根据压力测试由 512 B 调整为 1024 B。
-  - 压力路径下 M4ProducerTask 历史最小剩余 Stack：512 B。
-  - M4ConsumerTask 历史最小剩余 Stack：496 B。
-  - FreeRTOS Current Free Heap：11048 B。
-  - FreeRTOS Minimum Ever Free Heap：11048 B。
-  - M3 HeartBeatTask、UARTTask 和 Debug Logger 保持正常。
-  - Final Baseline 稳定性测试通过。
-  - 当前最新功能 checkpoint：`b78282c`。
+- M4.2 Task Notification / CMSIS-RTOS2 Thread Flags Baseline 已经通过 STM32F407VGT6 真实硬件验证：
+  - 已建立 `M4EventTask`。
+  - 已建立 `M4WorkTask`。
+  - 使用 `M4_EVENT_WORK_READY` 单一事件位。
+  - M4EventTask Final Priority = `osPriorityNormal`。
+  - M4WorkTask Final Priority = `osPriorityNormal`。
+  - 两个 Task Stack 均为 1024 B。
+  - Event Producer Period = 1000 ms。
+  - Work 使用 `osThreadFlagsWait(..., osFlagsWaitAny, osWaitForever)` 阻塞等待。
+  - 正常路径已验证 11 Sets → 11 Receives。
+  - 相同 Flag bit 重复事件实验已验证 33 Sets → 11 Receives。
+  - 已确认重复同一 Flag bit 会合并为 Pending State，而不是累计独立事件次数。
+  - 已确认 Thread Flags 不应作为无损事件计数器。
+  - 原 M4 Queue 在实验期间继续保持稳定。
+  - Final Baseline HeartBeatTask 最小剩余 Stack：384 B。
+  - Final Baseline UARTTask 最小剩余 Stack：504 B。
+  - Final Baseline M4ProducerTask 最小剩余 Stack：808 B。
+  - Final Baseline M4ConsumerTask 最小剩余 Stack：496 B。
+  - Final Baseline M4EventTask 最小剩余 Stack：528 B。
+  - Final Baseline M4WorkTask 最小剩余 Stack：528 B。
+  - FreeRTOS Current Free Heap：8776 B。
+  - FreeRTOS Minimum Ever Free Heap：8776 B。
+  - NRST ×3：通过。
+  - Power-cycle ×3：通过。
+  - 未观察到 HardFault、Hang 或 Heap 持续下降。
+  - 当前最新功能 checkpoint：`<07cf819>`。
 
-当前证据不包含 Task Notification、Binary Semaphore、Ring Buffer、ISR → Task 通知、USART2 RX、ADC + Timer + DMA、UART DMA、RS485、Modbus、CAN、Bootloader 或 Watchdog。
+当前证据不包含 Binary Semaphore、Ring Buffer、ISR → Task Thread Flags、USART2 RX、ADC + Timer + DMA、UART DMA、RS485、Modbus、CAN、Bootloader 或 Watchdog。
+
 
 ## Next Step
 
-进入 M4.2 Task Notification / CMSIS-RTOS2 Thread Flags。
+进入 M4.3 Binary Semaphore。
 
-先建立最小 Task → Task 事件通知实验，只传递“事件发生”语义，不通过 Notification 复制结构化数据；验证发送、阻塞等待、唤醒和重复通知行为，并与已经完成的 Queue 数据传递模型进行对比。
-
-M4.2 验证通过并形成独立 Git checkpoint 后，再进入 Binary Semaphore。暂不进入 M5 ADC + Timer + DMA。
+M4.3 Binary Semaphore 建立最小 Task → Task 同步实验，重点验证 Give / Take、阻塞等待和唤醒行为；随后与 M3 Debug Logger 已经使用的 Mutex 对比“事件同步”与“共享资源所有权保护”的职责差异。暂不进入 M5 ADC + Timer + DMA。

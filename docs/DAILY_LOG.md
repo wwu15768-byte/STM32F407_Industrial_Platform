@@ -937,3 +937,160 @@
 ## 明天下一步
 
 继续 M4，不进入 ADC、DMA 或其他后续外设功能。下一步建立最小 Task Notification / CMSIS-RTOS2 Thread Flags 实验，重点验证“事件通知而非数据传输”的使用场景、阻塞等待行为和与 Queue 的职责边界；完成正常路径和必要边界验证后再进入 Binary Semaphore。
+
+# 2026-10-05
+
+## 今日计划
+
+- 继续 M4 RTOS 通信与同步阶段，不进入 M5。
+- 在现有 `m4_ipc` 模块内建立 M4.2 Task Notification / CMSIS-RTOS2 Thread Flags 最小 Task → Task 事件通知实验。
+- 验证 Thread Flags 的阻塞等待、事件唤醒和正常 1:1 通知行为。
+- 人工构造同一个 Flag bit 连续重复 Set，验证重复事件是否会像 Queue 一样累计。
+- 重新测量新增 Task 后的 Task Stack 和 FreeRTOS Heap。
+- 恢复正常配置后完成 NRST 和完全断电重新上电稳定性测试。
+- M4.2 验证完成后形成独立功能 checkpoint，并更新项目文档。
+
+## 实际完成
+
+- 基于已经完成的 M4.1 Queue baseline 继续扩展 `m4_ipc` 模块，没有新建独立实验工程。
+- 保持原有：
+  - `M4ProducerTask`
+  - `M4ConsumerTask`
+  - `M4DataQueue`
+- 新增：
+  - `StartM4EventProducerTask`
+  - `StartM4WorkTask`
+- 定义单一事件位 `M4_EVENT_WORK_READY`。
+- M4.2 Final Baseline 配置：
+  - Event Producer Priority：`osPriorityNormal`。
+  - Event Producer Stack：1024 B。
+  - Event Work Priority：`osPriorityNormal`。
+  - Event Work Stack：1024 B。
+  - Event Producer Period：1000 ms。
+  - Work 使用 `osThreadFlagsWait(..., osFlagsWaitAny, osWaitForever)` 阻塞等待。
+- `StartM4WorkTask` 在没有事件时通过 `osThreadFlagsWait()` 阻塞，不进行 Busy Polling。
+- `StartM4EventProducerTask` 周期调用 `osThreadFlagsSet()` 设置 `M4_EVENT_WORK_READY`。
+- 正常路径实际观察到：
+  - Set Count 从 1 连续增加至 11。
+  - Receive Count 从 1 连续增加至 11。
+  - 每次返回的 Flag 为 `0x00000001`。
+  - 正常路径保持 11 Sets → 11 Receives。
+- 原 M4 Queue 在 Thread Flags 实验期间继续正常运行：
+  - Sequence 持续连续。
+  - Queue Count 正常保持为 0。
+  - 未观察到 Queue Full。
+  - 未观察到 Sequence Gap。
+- 完成重复 Flag bit 合并行为实验。
+- 为使实验结果具有确定性，临时将 `StartM4EventProducerTask` Priority 调整为 `osPriorityAboveNormal`，Work 保持 `osPriorityNormal`。
+- 每轮 Burst 在 Producer 重新阻塞前连续调用 3 次：
+  - `osThreadFlagsSet(M4_EVENT_WORK_READY)`
+- 实际观察到：
+  - Burst 1：Total Set = 3，Receive Count = 1。
+  - Burst 5：Total Set = 15，Receive Count = 5。
+  - Burst 10：Total Set = 30，Receive Count = 10。
+  - Burst 11：Total Set = 33，Receive Count = 11。
+- 确认同一个 Flag bit 在 Work 获得运行机会前被重复 Set 时不会累计成多个独立待处理事件，而是合并为一个 Pending Flag 状态。
+- 确认 Thread Flags 适合表达“某项工作待处理”，不能直接作为无损事件计数器使用。
+- Burst 压力实验期间资源数据稳定为：
+  - HeartBeatTask 历史最小剩余 Stack：384 B。
+  - UARTTask 历史最小剩余 Stack：504 B。
+  - M4ProducerTask 历史最小剩余 Stack：808 B。
+  - M4ConsumerTask 历史最小剩余 Stack：496 B。
+  - M4EventProducerTask 历史最小剩余 Stack：520 B。
+  - M4WorkTask 历史最小剩余 Stack：528 B。
+  - FreeRTOS Current Free Heap：8776 B。
+  - FreeRTOS Minimum Ever Free Heap：8776 B。
+- Burst 实验完成后已经恢复 Final Baseline：
+  - Event Producer Priority 恢复为 `osPriorityNormal`。
+  - 删除连续 3 次 Set 的 Burst 测试逻辑。
+  - 恢复每 1000 ms 单次 Set。
+- Final Baseline 稳定资源数据为：
+  - HeartBeatTask 历史最小剩余 Stack：384 B。
+  - UARTTask 历史最小剩余 Stack：504 B。
+  - M4ProducerTask 历史最小剩余 Stack：808 B。
+  - M4ConsumerTask 历史最小剩余 Stack：496 B。
+  - M4EventProducerTask 历史最小剩余 Stack：528 B。
+  - M4WorkTask 历史最小剩余 Stack：528 B。
+  - FreeRTOS Current Free Heap：8776 B。
+  - FreeRTOS Minimum Ever Free Heap：8776 B。
+- 相比 M4.1 Final Baseline 的 11048 B Free Heap，加入两个 1024 B Task 后当前 Free Heap 减少 2272 B，其中包含两个 Task Stack 以及对应 RTOS Task 管理开销。
+- Final Baseline 已完成：
+  - NRST ×3：全部通过。
+  - 完全断电重新上电 ×3：全部通过。
+- 六次重新启动后 Stack、Heap、Queue、Thread Flags、Heartbeat、UART 和 Debug Logger 均能够稳定恢复。
+- 未观察到 HardFault、Hang、Heap 持续下降、Queue 异常或 Thread Flag 错误。
+- 首轮资源日志因为单行过长被 Debug Logger 单条 buffer 截断，后续将系统资源输出拆分为两条日志，没有为此扩大日志 buffer。
+
+## 验收情况
+
+- M4.2 Task → Task Thread Flags 最小链路：通过。
+- `osThreadFlagsSet()` 基本通知行为：通过。
+- `osThreadFlagsWait(..., osWaitForever)` 阻塞等待：通过。
+- Work 事件到达后唤醒：通过。
+- 正常路径 11 Sets → 11 Receives：通过。
+- 同一个 Flag bit 重复 Set 合并行为：通过。
+- Burst 33 Sets → 11 Receives：通过。
+- Queue 与 Thread Flags 同时运行：通过。
+- Queue 正常 Sequence 连续性：通过。
+- 新增 Task Stack 运行时测量：完成。
+- FreeRTOS Heap 重新测量：完成。
+- Burst 临时优先级与测试代码恢复：完成。
+- M4.2 Final Baseline NRST ×3：通过。
+- M4.2 Final Baseline Power-cycle ×3：通过。
+- 未观察到 HardFault、Hang 或 Heap 持续下降。
+- M4.2 板级功能验收：通过。
+
+## 未完成
+
+- M4 Binary Semaphore 实验尚未开始。
+- Binary Semaphore 与现有 Debug Logger Mutex 的系统对比尚未完成。
+- Ring Buffer 尚未实现。
+- 多个不同 Thread Flag bit 的组合行为尚未专门实验。
+- ISR → Task Thread Flags / Notification 边界尚未验证。
+- M4 整体里程碑尚未关闭。
+- ADC、Timer、DMA 仍属于 M5，不在当前 M4.2 中引入。
+
+## 今日 Bug
+
+- 首轮 Thread Flag 正常测试中，Work 日志的 `receive_count` 持续输出为 0。修正计数位置 / 日志参数后，Receive Count 能够从 1 正常连续递增，并与正常 Set Count 保持 1:1。
+- 首轮 SYS 资源日志单行过长，超过当前 Debug Logger 单条消息容量，导致 `MinHeap` 尾部被截断。后续将资源日志拆分成两行，完整观察到 `Heap=8776 B` 和 `MinHeap=8776 B`。
+- 以上问题均在形成 Final Baseline 前修正，不作为当前 Known Bug，也不单独归档到 `ERROR_LOG.md`。
+
+## 今日学习
+
+- Thread Flags 与 Queue 的核心职责不同：
+  - Queue 适合携带结构化数据并保存有限数量的独立消息。
+  - Thread Flags 更适合轻量表达“某个事件已经发生 / 某项工作需要处理”。
+- `osThreadFlagsWait(..., osWaitForever)` 可以让 Work 在没有事件时进入 Blocked 状态，而不是持续轮询。
+- 同一个 Thread Flag bit 被重复 Set 时，本质是反复将同一个状态位置 1，而不是建立多个排队事件。
+- 如果三个相同 Flag 在 Work 运行前连续到达，最终可能只产生一次 Work 的有效事件消费。
+- 因此 Thread Flags 不能被直接当成无损事件计数器。
+- 如果未来 ADC DMA Half Complete 和 Full Complete 需要区分，应至少使用不同事件 bit 或建立更加明确的 Buffer Ownership / Queue 机制，不能简单假设相同 Flag 会保存每一次回调次数。
+- 人工提高 Event Producer Priority 可以构造稳定、可重复的事件合并实验，使 Work 在多个 Set 完成前无法先运行。
+- Debug Logger 的日志打印顺序只能用于功能观测，不能直接视为 RTOS 内核精确调度轨迹。
+- Task Stack 仍然必须以压力路径和异常路径的历史最小剩余空间进行判断。
+- 每增加新的 Task，都需要重新测量 FreeRTOS Heap 和 Task Stack，而不能沿用旧里程碑资源数据。
+
+## 尚未理解
+
+- 尚未实际验证 ISR → Task Thread Flags / Notification。
+- 尚未实际验证多个不同 Flag bit 同时 Pending 时的处理策略。
+- 尚未验证 Binary Semaphore 的 Give / Take、阻塞和唤醒行为。
+- 尚未完成 Binary Semaphore 与 Mutex 在事件同步、资源所有权和优先级继承方面的实机对比。
+- 尚未设计 M5 ADC DMA Half / Full 事件与采集 Buffer Ownership 的最终方案。
+- 尚未实现 Ring Buffer 的满、空、回绕以及 ISR / Task 并发访问模型。
+
+## Git
+
+- Branch：`feature/m4-rtos-communication-baseline`。
+- M4.1 Queue 功能 checkpoint：`b78282c`，`feat: establish RTOS queue communication baseline`。
+- M4.1 Queue 文档 checkpoint：`22d25bd`，`docs: record M4 queue baseline verification`。
+- M4.2 Thread Flags 板级功能已经完成验证。
+- M4.2 功能 checkpoint：`<M4.2功能提交哈希>`，`feat: establish RTOS thread flag notification baseline`。
+- M4.2 文档修改等待本轮检查后建立独立 docs checkpoint。
+
+## 明天下一步
+
+继续 M4，不进入 M5。
+
+下一步建立 M4.3 Binary Semaphore 最小 Task → Task 同步实验，重点验证 Give / Take、阻塞等待和唤醒行为；随后与 M3 Debug Logger 已经使用的 Mutex 对比“事件同步”与“共享资源所有权保护”的职责差异。
