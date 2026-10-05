@@ -16,7 +16,7 @@ M4.2 Task Notification / CMSIS-RTOS2 Thread Flags baseline 已完成真实板级
 
 - 当前 Branch：`feature/m4-rtos-communication-baseline`。
 - Upstream：`origin/feature/m4-rtos-communication-baseline`。
-- M4.2 最新功能 checkpoint：`<07cf819>`，`feat: establish RTOS thread flag notification baseline`。
+- M4.2 最新功能 checkpoint：`<fd80cc9>`，`feat: establish RTOS thread flag notification baseline`。
 - M4.1 文档 checkpoint：`22d25bd`，`docs: record M4 queue baseline verification`。
 - M4.1 Queue 功能 checkpoint：`b78282c`，`feat: establish RTOS queue communication baseline`。
 - M4 路线更新 checkpoint：`ed6c3a7`，`docs: update roadmap for expanded project milestones`。
@@ -216,7 +216,7 @@ MinHeap=8776 B
 
 M4.2 最新功能 checkpoint：
 
-`<07cf819>`：`feat: establish RTOS thread flag notification baseline`
+`<fd80cc9>`：`feat: establish RTOS thread flag notification baseline`
 
 ## 当前已经明确的职责边界
 
@@ -315,7 +315,7 @@ M4.2 已完成：
 
 当前最新功能 checkpoint：
 
-`<07cf819>`：`feat: establish RTOS thread flag notification baseline`
+`<fd80cc9>`：`feat: establish RTOS thread flag notification baseline`
 
 ## 下一步最合理的一个任务
 

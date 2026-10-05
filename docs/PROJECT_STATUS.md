@@ -213,7 +213,7 @@ M4 完成并形成稳定关闭 checkpoint 前，不提前实现 ADC + Timer + DM
 - M4.2 Final Baseline 已完成完全断电重新上电 ×3。
 - 六次重新启动后 Queue、Thread Flags、Heartbeat、UART、Stack 和 Heap 均能够稳定恢复。
 - 未观察到 HardFault、Hang 或 Heap 持续下降。
-- M4.2 最新功能 checkpoint：`<07cf819>`，`feat: establish RTOS thread flag notification baseline`。
+- M4.2 最新功能 checkpoint：`<fd80cc9>`，`feat: establish RTOS thread flag notification baseline`。
 
 ## In Progress
 
@@ -245,7 +245,7 @@ Task Notification、Binary Semaphore、Ring Buffer、ADC + Timer + DMA、UART DM
 
 - 当前 Branch：`feature/m4-rtos-communication-baseline`。
 - Upstream：`origin/feature/m4-rtos-communication-baseline`。
-- M4.2 最新已验证功能 checkpoint：`<07cf819>`，`feat: establish RTOS thread flag notification baseline`。
+- M4.2 最新已验证功能 checkpoint：`<fd80cc9>`，`feat: establish RTOS thread flag notification baseline`。
 - M4.1 文档 checkpoint：`22d25bd`，`docs: record M4 queue baseline verification`。
 - M4.1 Queue 功能 checkpoint：`b78282c`，`feat: establish RTOS queue communication baseline`。
 - M4 路线更新 checkpoint：`ed6c3a7`，`docs: update roadmap for expanded project milestones`。
@@ -280,7 +280,7 @@ Task Notification、Binary Semaphore、Ring Buffer、ADC + Timer + DMA、UART DM
   - NRST ×3：通过。
   - Power-cycle ×3：通过。
   - 未观察到 HardFault、Hang 或 Heap 持续下降。
-  - 当前最新功能 checkpoint：`<07cf819>`。
+  - 当前最新功能 checkpoint：`<fd80cc9>`。
 
 当前证据不包含 Binary Semaphore、Ring Buffer、ISR → Task Thread Flags、USART2 RX、ADC + Timer + DMA、UART DMA、RS485、Modbus、CAN、Bootloader 或 Watchdog。
 
