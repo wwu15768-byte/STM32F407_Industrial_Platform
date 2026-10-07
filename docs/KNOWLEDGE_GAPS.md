@@ -468,3 +468,156 @@ Task → Task Thread Flags 基础已掌握。
 相同 Flag bit 的事件合并语义已经通过真实硬件实验验证。
 
 ISR → Task、多 Flag 和 DMA Buffer Ownership 仍待后续验证。
+
+## KG-008：Binary Semaphore、Mutex、临界区与同步任务 Stack 余量
+
+### 来源
+
+M4 Binary Semaphore Task → Task 同步、Mutex 共享数据保护、Queue / Thread Flags / Semaphore / Mutex 联合运行和同步任务 Stack 调优过程。
+
+### 当前理解
+
+已经通过真实 STM32F407VGT6 验证 CMSIS-RTOS2 Binary Semaphore 和 Mutex 的基础行为。
+
+当前已经理解：
+
+- Binary Semaphore 可以用于 Task → Task 同步。
+- `osSemaphoreNew(1, 0, ...)` 建立初始不可用的 Binary Semaphore。
+- Consumer 使用 `osSemaphoreAcquire(..., osWaitForever)` 时，在 Semaphore 不可用期间进入阻塞等待。
+- Producer `osSemaphoreRelease()` 后等待 Task 能够恢复执行。
+- Binary Semaphore 当前表达同步信号，不负责携带结构化数据。
+- Binary Semaphore 不应该被直接当作 Mutex 使用。
+- Mutex 用于保护共享资源和 Read-Modify-Write 临界区。
+- 两个 Task 在同一个 Mutex 下访问 `shared_value` 时能够保持数据更新连续。
+- 临界区应该尽量短。
+- 不应在 Mutex 持有期间加入无必要 Delay、复杂格式化或长时间阻塞 I/O。
+- 将 Logger 放在 Mutex Release 后可以缩短临界区。
+- Logger 位于临界区外后，UART 日志的打印顺序可能和真实临界区执行顺序不同。
+- 因此日志顺序不能被直接视为 RTOS 调度 Trace。
+- 在临界区内生成 `shared_op_seq` 可以更可靠地记录共享数据实际操作顺序。
+- 按 `shared_op_seq` 检查时，前一次 after 与下一次 before 连续，可以作为当前互斥保护有效的观测证据。
+- Queue、Thread Flags、Binary Semaphore 和 Mutex 当前职责可以区分为：
+  - Queue：数据和独立消息。
+  - Thread Flags：Pending Event State。
+  - Binary Semaphore：同步信号。
+  - Mutex：共享资源所有权与互斥。
+- Task 能够长期运行不等于 Stack 配置安全。
+- `osThreadGetStackSpace()` 的历史最小剩余空间必须用于检查最坏已执行路径。
+- 本次新增同步 Task 初始最小余量：
+  - Semaphore Task：32 B。
+  - Mutex Task：8 B。
+- 该余量虽然尚未出现可见 Stack Overflow，但不足以作为稳定 baseline。
+- 调整后：
+  - Semaphore Task 最小余量：288 B。
+  - Mutex Task 最小余量：488 B / 520 B。
+- 动态创建 Task 增加 Stack 后会直接减少 FreeRTOS Heap。
+- 本次 Stack 总增量约 1536 B，Free Heap 同样减少约 1536 B，实际资源变化与配置一致。
+- Current Free Heap 与 Minimum Ever Free Heap 长期保持一致时，可以说明当前观察窗口内未发生进一步的最坏 heap 消耗。
+
+当前同步机制 Final 资源观察：
+
+```text
+HeartFree=384 B
+UARTFree=488 B
+M4ProdFree=808 B
+M4ConsFree=496 B
+M4EvtFree=528 B
+M4WorkFree=528 B
+SemProFree=288 B
+SemConFree=288 B
+MutexAFree=488 B
+MutexBFree=520 B
+Heap=4568 B
+MinHeap=4568 B
+```
+
+### 缺少什么
+
+尚未实际掌握和验证：
+
+- Counting Semaphore。
+- Binary Semaphore 连续重复 Release 的更多边界。
+- ISR → Task Semaphore 的 CMSIS-RTOS2 安全使用边界。
+- Mutex Priority Inheritance 的实际行为。
+- Priority Inversion 可重复实验。
+- 多个 Mutex 同时存在时的 Lock Ordering。
+- Deadlock 人工构造与诊断。
+- Ring Buffer 与 Semaphore / Event 的组合模型。
+- DMA Buffer Ownership 与同步机制的组合设计。
+
+### 为什么重要
+
+M5 ADC + Timer + DMA 和后续 UART DMA 会同时涉及：
+
+- ISR 事件。
+- Buffer Ready 状态。
+- Task 唤醒。
+- 数据所有权。
+- 共享状态。
+- 实时资源约束。
+
+如果不能区分 Queue、Thread Flags、Semaphore 和 Mutex 的职责，可能出现：
+
+- 把同步状态误当数据缓冲。
+- 把 Mutex 误当事件通知。
+- 事件丢失。
+- 共享数据覆盖。
+- 临界区过长。
+- 优先级反转。
+- 死锁。
+- Stack 安全余量不足。
+
+因此进入 M5 前需要先把 M4 的 Ring Buffer 和 ISR → Task 边界补齐。
+
+### 学习优先级
+
+Binary Semaphore 与 Mutex 基础已经完成。
+
+下一优先级：
+
+1. Ring Buffer。
+2. ISR → Task 通信边界。
+3. Buffer Ownership。
+4. 再进入 M5 ADC + Timer + DMA。
+
+Priority Inheritance、复杂 Deadlock 和 Counting Semaphore 在实际需求出现或 M4 剩余时间允许时继续深化，不作为进入 Ring Buffer 的前置阻塞条件。
+
+### 学习任务
+
+- 实现独立 Ring Buffer。
+- 验证 Empty / Full / Wrap-around。
+- 明确 Ring Buffer 单 Producer / 单 Consumer 基础假设。
+- 建立最小 ISR → Task 通信实验。
+- 核对 CMSIS-RTOS2 ISR-safe API。
+- ISR 中保持非阻塞和最小执行路径。
+- M5 前建立 ADC DMA Buffer Ownership 草案。
+- 后续有明确优先级场景时构造 Mutex Priority Inversion / Inheritance 实验。
+
+### 小实验
+
+已完成：
+
+- Binary Semaphore 初始 Depleted。
+- Consumer `osWaitForever` Blocking Acquire。
+- Producer 周期 Release。
+- Waiting → Release → Acquired → Waiting。
+- Binary Semaphore 与 Queue / Thread Flags 并行运行。
+- 双 Task Mutex 共享数据保护。
+- A `+1` / B `+10` Read-Modify-Write。
+- 临界区外 Logger。
+- `shared_op_seq` 临界区顺序观测。
+- Queue + Thread Flags + Semaphore + Mutex 联合长期运行。
+- Semaphore / Mutex Task Stack High Water Mark 测量。
+- 初始 32 B / 8 B Stack 风险识别。
+- Stack 调整后长期重新验证。
+- FreeRTOS Heap 与 Stack 增量一致性验证。
+
+### 状态
+
+Binary Semaphore Task → Task 基础已掌握。
+
+Mutex 共享数据基础互斥行为已通过真实硬件验证。
+
+同步任务 Stack 资源调优方法已完成实机验证。
+
+Ring Buffer、ISR → Task、Priority Inheritance 和 DMA Buffer Ownership 仍待后续验证。

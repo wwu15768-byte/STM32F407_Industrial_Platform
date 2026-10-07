@@ -3,7 +3,7 @@
 > 唯一回答：项目现在在哪？
 > 更新时机：项目状态发生明显变化时。
 
-更新时间：2026-10-05
+更新时间：2026-10-07
 
 ## Current Milestone
 
@@ -11,19 +11,21 @@ M4：RTOS 通信、同步和数据缓冲。M0～M3 已完成，M4 为当前阶�
 
 M4.1 Queue Producer / Consumer baseline 已完成。
 
-M4.2 Task Notification / CMSIS-RTOS2 Thread Flags 已完成真实板级正常通知、重复事件合并、运行时资源和复位稳定性验证。
+M4.2 Task Notification / CMSIS-RTOS2 Thread Flags baseline 已完成正常通知、重复事件合并、资源和稳定性验证。
 
-当前下一步为 M4.3 Binary Semaphore，不进入 M5。
+M4.3 Binary Semaphore Task → Task 同步和 Mutex 共享资源保护对比实验已完成真实板级功能、联合运行和 Stack / Heap 调优验证。
+
+当前下一步为 Ring Buffer，不进入 M5。
 
 ## Current Goal
 
-在已经完成 Queue 数据传递和 Thread Flags 轻量事件通知基础上继续推进 M4。
+当前 Queue、Thread Flags、Binary Semaphore 和 Mutex 四类 RTOS 通信 / 同步机制基础均已完成真实硬件验证。
 
-下一步建立 Binary Semaphore 最小同步实验，并与 M3 Debug Logger 已经使用的 Mutex 对比“事件同步”与“共享资源所有权保护”的职责差异。
+下一步实现独立 Ring Buffer，验证 Empty、Full、Wrap-around、Read / Write Index 和数据完整性。
 
-之后进入 Ring Buffer 和 ISR → Task 通信边界验证。
+Ring Buffer 通过后建立最小 ISR → Task 通信边界实验，明确 ISR-safe API、非阻塞规则和 Task 唤醒行为。
 
-M4 完成并形成稳定关闭 checkpoint 前，不提前实现 ADC + Timer + DMA、UART DMA、RS485、Modbus、CAN、Bootloader 或 Watchdog。
+M4 完成 Ring Buffer、ISR → Task 边界以及最终稳定性和文档收口前，不进入 M5 ADC + Timer + DMA 业务实现。
 
 ## Completed
 
@@ -214,18 +216,59 @@ M4 完成并形成稳定关闭 checkpoint 前，不提前实现 ADC + Timer + DM
 - 六次重新启动后 Queue、Thread Flags、Heartbeat、UART、Stack 和 Heap 均能够稳定恢复。
 - 未观察到 HardFault、Hang 或 Heap 持续下降。
 - M4.2 最新功能 checkpoint：`<fd80cc9>`，`feat: establish RTOS thread flag notification baseline`。
+- 已完成 M4 Binary Semaphore Task → Task 同步实验。
+- 已建立 `SyncSem`：
+  - Maximum Count：1。
+  - Initial Count：0 / Depleted。
+- 已建立 `SemProducerTask` 和 `SemConsumerTask`。
+- Consumer 使用 `osSemaphoreAcquire(..., osWaitForever)` 阻塞等待。
+- Producer 每约 2000 ms Release Semaphore。
+- 已验证 Producer Release 后 Consumer 能够稳定被唤醒，并在 Acquire 后重新进入 Waiting。
+- 已形成并推送 `435ba4f：feat: establish RTOS semaphore synchronization baseline`。
+- 已将 `debug_log.c` 从 CubeMX 生成 CMake source list 的依赖中移出，由根目录 `CMakeLists.txt` 显式维护。
+- 已形成并推送 `34ddce3：build: keep debug logger outside CubeMX generated sources`。
+- 已建立 `SharedDataMutex`。
+- 已建立 `MutexTaskA` 和 `MutexTaskB`。
+- 已使用 `shared_value` 验证两个 Task 的共享数据 Read-Modify-Write 互斥访问。
+- 已增加 `shared_op_seq` 区分真实临界区执行顺序和 UART 日志打印顺序。
+- 已验证按 `shared_op_seq` 检查时共享数据更新连续，无旧值覆盖。
+- 已形成并推送 `c5bc54a：feat: establish RTOS mutex protection baseline`。
+- Queue、Thread Flags、Binary Semaphore、Mutex 已完成联合长期运行验证。
+- 初始同步 Task Stack 测量发现：
+  - SemProducerTask 最小剩余：32 B。
+  - SemConsumerTask 最小剩余：32 B。
+  - MutexTaskA 最小剩余：8 B。
+  - MutexTaskB 最小剩余：8 B。
+- 已根据真实 High Water Mark 调整 Stack：
+  - Semaphore Task：约 512 B → 768 B。
+  - Mutex Task：约 512 B → 1024 B。
+- 调整后长期运行：
+  - SemProducerTask 最小剩余：288 B。
+  - SemConsumerTask 最小剩余：288 B。
+  - MutexTaskA 最小剩余：488 B。
+  - MutexTaskB 最小剩余：520 B。
+  - FreeRTOS Current Free Heap：4568 B。
+  - FreeRTOS Minimum Ever Free Heap：4568 B。
+- Stack 总增量约 1536 B，Free Heap 同样减少约 1536 B，资源变化符合预期。
+- 当前最终构建：
+  - RAM：21112 B / 128 KB，16.11%。
+  - FLASH：33724 B / 1 MB，3.22%。
+- 已形成并推送 `c84fed8：fix: increase M4 synchronization task stack margins`。
+- 当前未观察到 HardFault、Hang、Heap 持续下降、Queue Sequence Gap、Semaphore 死锁或 Mutex 数据覆盖。
 
 ## In Progress
 
 M4.1 Queue Producer / Consumer 已完成。
 
-M4.2 Task Notification / CMSIS-RTOS2 Thread Flags 已完成正常通知、阻塞等待、相同 Flag bit 事件合并、资源测量以及 Final Baseline 稳定性验证。
+M4.2 Task Notification / CMSIS-RTOS2 Thread Flags 已完成。
 
-当前准备进入 M4.3 Binary Semaphore。
+M4.3 Binary Semaphore 与 Mutex 对比验证已完成，包括功能、联合运行、Stack High Water Mark 和 Heap 调优。
 
-下一阶段重点验证 Give / Take、阻塞等待和任务唤醒，并与已有 Debug Logger Mutex 对比同步语义和资源所有权语义。
+当前准备进入 Ring Buffer。
 
-Ring Buffer 和 ISR → Task 边界尚未开始。
+Ring Buffer 完成后继续验证 ISR → Task 通信边界。
+
+当前 Semaphore / Mutex 实验代码仍有一部分位于 CubeMX 生成的 `freertos.c`，M4 最终关闭前需要与 `DEC-20260930-01` 的 `m4_ipc` 模块边界重新核对并决定是否收敛。
 
 ## Blocked
 
@@ -233,60 +276,87 @@ Ring Buffer 和 ISR → Task 边界尚未开始。
 
 ## Known Bugs
 
-无已确认固件 Bug。
+当前无已确认固件 Known Bug。
 
-M4.1 压力测试曾发现 M4ProducerTask 初始 512 B Stack 在 Queue Full + 错误日志路径下历史最小剩余降至 0 B。该配置风险已经通过将 Producer Stack 调整为 1024 B 并重新压力验证解决，不作为当前 Known Bug。
+M4.1 曾发现 Queue 压力错误日志路径下 Producer Stack 余量不足，已通过 Stack 调整解决。
+
+M4.3 曾发现 Semaphore / Mutex 新增 Task 历史最小剩余 Stack 仅为 32 B / 8 B，已通过 Stack 调整和长期运行重新验证解决，不作为当前 Known Bug。
+
+CubeMX Generate Code 会产生大量 CRLF / LF EOL-only 工作区噪音，目前通过 Git diff 检查与恢复无实际内容变化文件处理，该问题属于开发流程噪音，不属于目标固件运行 Bug。
 
 当前 `LOG_xxx()` 仍只作为正常 Task / Thread context API，不是 ISR-safe 日志接口。
 
-Task Notification、Binary Semaphore、Ring Buffer、ADC + Timer + DMA、UART DMA + IDLE、RS485、Modbus、CAN、Bootloader、Watchdog 和 Fault Diagnostics 属于尚未完成的后续功能，不作为 Known Bug。
+Ring Buffer、ISR → Task 通信边界和 M5 以后功能属于尚未完成项，不作为 Known Bug。
 
 ## Current Branch
 
 - 当前 Branch：`feature/m4-rtos-communication-baseline`。
 - Upstream：`origin/feature/m4-rtos-communication-baseline`。
-- M4.2 最新已验证功能 checkpoint：`<fd80cc9>`，`feat: establish RTOS thread flag notification baseline`。
-- M4.1 文档 checkpoint：`22d25bd`，`docs: record M4 queue baseline verification`。
-- M4.1 Queue 功能 checkpoint：`b78282c`，`feat: establish RTOS queue communication baseline`。
-- M4 路线更新 checkpoint：`ed6c3a7`，`docs: update roadmap for expanded project milestones`。
-- M4 起点：`c13b8e5`，M3 Merge Commit。
-- 当前 `main` / `origin/main` 位于 `c13b8e5`，包含完整 M0～M3。
-- 本轮 M4.2 文档完成并提交后应保持 Working Tree clean。
+- 最新同步任务 Stack 调优 checkpoint：`c84fed8`，`fix: increase M4 synchronization task stack margins`。
+- Mutex 功能 checkpoint：`c5bc54a`，`feat: establish RTOS mutex protection baseline`。
+- Binary Semaphore 功能 checkpoint：`435ba4f`，`feat: establish RTOS semaphore synchronization baseline`。
+- CMake 用户源码边界修复：`34ddce3`，`build: keep debug logger outside CubeMX generated sources`。
+- Thread Flags 文档 checkpoint：`1008734`，`docs: record M4 thread flag baseline verification`。
+- Thread Flags 功能 checkpoint：`fd80cc9`，`feat: establish RTOS thread flag notification baseline`。
+- Queue 文档 checkpoint：`22d25bd`，`docs: record M4 queue baseline verification`。
+- Queue 功能 checkpoint：`b78282c`，`feat: establish RTOS queue communication baseline`。
+- M4 起点：`c13b8e5`。
+- 当前本地与远程分支同步。
+- Working Tree：clean。
 
 ## Last Verified Function
 
-- M4.2 Task Notification / CMSIS-RTOS2 Thread Flags Baseline 已经通过 STM32F407VGT6 真实硬件验证：
-  - 已建立 `M4EventTask`。
-  - 已建立 `M4WorkTask`。
-  - 使用 `M4_EVENT_WORK_READY` 单一事件位。
-  - M4EventTask Final Priority = `osPriorityNormal`。
-  - M4WorkTask Final Priority = `osPriorityNormal`。
-  - 两个 Task Stack 均为 1024 B。
-  - Event Producer Period = 1000 ms。
-  - Work 使用 `osThreadFlagsWait(..., osFlagsWaitAny, osWaitForever)` 阻塞等待。
-  - 正常路径已验证 11 Sets → 11 Receives。
-  - 相同 Flag bit 重复事件实验已验证 33 Sets → 11 Receives。
-  - 已确认重复同一 Flag bit 会合并为 Pending State，而不是累计独立事件次数。
-  - 已确认 Thread Flags 不应作为无损事件计数器。
-  - 原 M4 Queue 在实验期间继续保持稳定。
-  - Final Baseline HeartBeatTask 最小剩余 Stack：384 B。
-  - Final Baseline UARTTask 最小剩余 Stack：504 B。
-  - Final Baseline M4ProducerTask 最小剩余 Stack：808 B。
-  - Final Baseline M4ConsumerTask 最小剩余 Stack：496 B。
-  - Final Baseline M4EventTask 最小剩余 Stack：528 B。
-  - Final Baseline M4WorkTask 最小剩余 Stack：528 B。
-  - FreeRTOS Current Free Heap：8776 B。
-  - FreeRTOS Minimum Ever Free Heap：8776 B。
-  - NRST ×3：通过。
-  - Power-cycle ×3：通过。
-  - 未观察到 HardFault、Hang 或 Heap 持续下降。
-  - 当前最新功能 checkpoint：`<fd80cc9>`。
+- 当前最新验证为 M4 Binary Semaphore + Mutex + Queue + Thread Flags 联合运行 baseline。
+- Binary Semaphore：
+  - `SyncSem`
+  - Maximum Count = 1。
+  - Initial Count = 0。
+  - Consumer 使用 `osSemaphoreAcquire(..., osWaitForever)`。
+  - Producer 每约 2000 ms Release。
+  - Consumer 能够稳定完成 Waiting → Acquired → Waiting。
+- Mutex：
+  - `SharedDataMutex`
+  - MutexTaskA：共享值 +1。
+  - MutexTaskB：共享值 +10。
+  - 使用 `shared_op_seq` 记录临界区真实操作顺序。
+  - 按 seq 检查时共享值连续，无旧值覆盖。
+- 当前长期运行资源：
+  - HeartBeatTask：384 B。
+  - UARTTask：488 B。
+  - M4ProducerTask：808 B。
+  - M4ConsumerTask：496 B。
+  - M4EventTask：528 B。
+  - M4WorkTask：528 B。
+  - SemProducerTask：288 B。
+  - SemConsumerTask：288 B。
+  - MutexTaskA：488 B。
+  - MutexTaskB：520 B。
+  - Current Free Heap：4568 B。
+  - Minimum Ever Free Heap：4568 B。
+- 当前最终构建：
+  - RAM：21112 B / 128 KB，16.11%。
+  - FLASH：33724 B / 1 MB，3.22%。
+- 长期运行未观察到 HardFault、Hang、Heap 持续下降或四类 IPC / 同步机制异常。
+- 当前最新 checkpoint：`c84fed8`。
 
-当前证据不包含 Binary Semaphore、Ring Buffer、ISR → Task Thread Flags、USART2 RX、ADC + Timer + DMA、UART DMA、RS485、Modbus、CAN、Bootloader 或 Watchdog。
-
+当前证据仍不包含 Ring Buffer、ISR → Task 通信边界、ADC + Timer + DMA、UART DMA、RS485、Modbus、CAN、Bootloader 或 Watchdog。
 
 ## Next Step
 
-进入 M4.3 Binary Semaphore。
+进入 M4 Ring Buffer。
 
-M4.3 Binary Semaphore 建立最小 Task → Task 同步实验，重点验证 Give / Take、阻塞等待和唤醒行为；随后与 M3 Debug Logger 已经使用的 Mutex 对比“事件同步”与“共享资源所有权保护”的职责差异。暂不进入 M5 ADC + Timer + DMA。
+先实现独立于 RTOS 的基础 Ring Buffer，并验证：
+
+- Empty。
+- Full。
+- Wrap-around。
+- Read Index / Write Index。
+- 数据写入与读取顺序。
+- 满时写入策略。
+- 空时读取策略。
+
+Ring Buffer 基础完成后，再建立最小 ISR → Task 通信实验，明确 ISR-safe、非阻塞、Task 唤醒和 Buffer Ownership 边界。
+
+M4 最终关闭前同时核对 Semaphore / Mutex 实验代码与 `m4_ipc` 模块边界的一致性。
+
+暂不进入 M5 ADC + Timer + DMA。

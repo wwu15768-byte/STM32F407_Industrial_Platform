@@ -1136,3 +1136,238 @@
   - 尚未验证 ISR context 中设置 Thread Flags。
   - 当前测试使用人为优先级关系确保事件合并现象可稳定复现。
   - 本测试用于验证 RTOS 语义，不代表后续 ADC DMA 的最终生产架构。
+
+## TEST-20261007-01：M4 Binary Semaphore Task → Task 同步基线验证
+
+- 目标：
+  - 验证 CMSIS-RTOS2 Binary Semaphore 的 Task → Task 基本同步行为。
+  - 验证 Semaphore 初始不可用时 Consumer 能够阻塞等待。
+  - 验证 Producer Release 后 Consumer 能够被唤醒。
+  - 验证 Binary Semaphore 与既有 Queue、Thread Flags 能够同时运行。
+
+- 配置：
+  - Semaphore：`SyncSem`
+  - Maximum Count：1。
+  - Initial Count：0 / Depleted。
+  - Producer：`SemProducerTask`
+  - Consumer：`SemConsumerTask`
+  - Producer Period：约 2000 ms。
+  - Consumer Wait：`osSemaphoreAcquire(..., osWaitForever)`。
+
+- 观察：
+  - 系统启动后首先观察到：
+
+```text
+[I][SEM] Consumer Waiting
+```
+
+  - 在 Producer Release 前没有观察到 Consumer Acquired。
+  - Producer 周期 Release 后观察到：
+
+```text
+[I][SYS] Producer Released
+[I][SEM] Consumer Acquired
+[I][SEM] Consumer Waiting
+```
+
+  - 上述过程能够周期重复。
+  - Consumer Acquire 成功后重新进入 Waiting。
+  - 原 Queue Sequence 持续连续。
+  - 原 Thread Flags Set / Receive 持续对应。
+  - 未观察到 HardFault、Hang 或同步死锁。
+
+- 初次独立 Semaphore Baseline 资源观察：
+
+```text
+RAM=21088 B
+FLASH=33044 B
+Heap=7440 B
+MinHeap=7440 B
+```
+
+- 结论：
+  - PASS。
+  - Binary Semaphore 可以用于当前 Task → Task 同步。
+  - Count = 0 时 Consumer 可以阻塞等待，不需要 Busy Polling。
+  - Producer Release 后等待任务能够恢复运行。
+  - Binary Semaphore 当前用于同步信号，不用于共享资源所有权保护。
+
+- 功能 checkpoint：
+  - `435ba4f`：`feat: establish RTOS semaphore synchronization baseline`
+
+- 边界：
+  - 当前未验证 Counting Semaphore。
+  - 当前未验证 ISR → Task Semaphore。
+  - 当前未验证重复 Release 的所有边界行为。
+  - 当前结果不代表 Binary Semaphore 可以替代 Mutex。
+
+
+## TEST-20261007-02：M4 Mutex 共享数据保护与临界区顺序验证
+
+- 目标：
+  - 验证 CMSIS-RTOS2 Mutex 能够保护两个 Task 共享访问的数据。
+  - 验证 Read-Modify-Write 临界区不会发生旧值覆盖。
+  - 区分临界区实际执行顺序和 UART 日志打印顺序。
+  - 与 Binary Semaphore 建立职责边界。
+
+- 配置：
+  - Mutex：`SharedDataMutex`
+  - Task：
+    - `MutexTaskA`
+    - `MutexTaskB`
+  - 共享数据：`shared_value`
+  - MutexTaskA：每次 `shared_value + 1`
+  - MutexTaskB：每次 `shared_value + 10`
+  - 两 Task 均通过 `osMutexAcquire(..., osWaitForever)` 获取 Mutex。
+  - 共享数据修改完成后立即 `osMutexRelease()`。
+  - `LOG_INFO()` 放在 Mutex Release 后。
+  - 增加 `shared_op_seq`，在临界区内生成真实操作序号。
+
+- 初始观察：
+  - 共享数据能够连续更新。
+  - 曾观察到日志输出顺序与数据操作顺序不同，例如较晚的操作日志可能较早打印。
+  - 该现象不能直接证明 Mutex 失败，因为 Logger 位于 Mutex 临界区外。
+
+- 增加 `shared_op_seq` 后实际观察：
+
+```text
+[I][M4M] seq=37 A value=198->199
+[I][M4M] seq=38 B value=199->209
+
+[I][M4M] seq=39 A value=209->210
+[I][M4M] seq=40 B value=210->220
+
+[I][M4M] seq=43 A value=231->232
+[I][M4M] seq=44 B value=232->242
+```
+
+- 验证结果：
+  - `shared_op_seq` 连续。
+  - 按 seq 顺序检查时，前一次 `after` 与下一次 `before` 连续。
+  - 未观察到两个 Task 同时基于同一个旧值完成更新。
+  - 未观察到共享数据丢失更新。
+  - 未观察到 Mutex 死锁。
+  - Queue、Thread Flags、Semaphore 同时继续运行。
+
+- 结论：
+  - PASS。
+  - Mutex 能够正确保护当前共享数据 Read-Modify-Write 临界区。
+  - UART 日志顺序不能作为临界区实际调度顺序证据。
+  - `shared_op_seq` 能够提供比日志打印顺序更可靠的操作顺序观测。
+  - Mutex 用于共享资源互斥 / 所有权保护，与 Binary Semaphore 的任务同步职责不同。
+  - 当前保持“临界区尽量短”的实现原则。
+
+- 功能 checkpoint：
+  - `c5bc54a`：`feat: establish RTOS mutex protection baseline`
+
+- 边界：
+  - 当前未专门验证 Priority Inheritance。
+  - 当前未构造 Priority Inversion 场景。
+  - 当前共享资源实验为软件变量，不代表所有复杂外设共享场景。
+
+
+## TEST-20261007-03：M4 同步任务 Stack 调优与联合长期运行验证
+
+- 目标：
+  - 在 Queue、Thread Flags、Binary Semaphore、Mutex 同时运行条件下检查运行时资源。
+  - 测量新增 Semaphore / Mutex Task 历史最小剩余 Stack。
+  - 根据实测结果修正 Stack 安全余量。
+  - 检查调整后的 FreeRTOS Heap 与长期运行稳定性。
+
+- 初始同步任务 Stack 配置：
+  - SemProducerTask：约 512 B。
+  - SemConsumerTask：约 512 B。
+  - MutexTaskA：约 512 B。
+  - MutexTaskB：约 512 B。
+
+- 初始长期运行测量：
+
+```text
+SemProFree=32 B
+SemConFree=32 B
+MutexAFree=8 B
+MutexBFree=8 B
+Heap=6104 B
+MinHeap=6104 B
+```
+
+- 判断：
+  - 32 B Semaphore Task Stack 余量过低。
+  - 8 B Mutex Task Stack 余量不足以作为稳定工程 baseline。
+  - 当前没有观察到 Stack Overflow，但配置缺少合理安全余量。
+
+- 调整：
+  - SemProducerTask：
+    - CubeMX Stack Size：128 → 192。
+    - 实际约 512 B → 768 B。
+  - SemConsumerTask：
+    - CubeMX Stack Size：128 → 192。
+    - 实际约 512 B → 768 B。
+  - MutexTaskA：
+    - CubeMX Stack Size：128 → 256。
+    - 实际约 512 B → 1024 B。
+  - MutexTaskB：
+    - CubeMX Stack Size：128 → 256。
+    - 实际约 512 B → 1024 B。
+
+- 调整后长期运行资源：
+
+```text
+HeartFree=384 B
+UARTFree=488 B
+M4ProdFree=808 B
+M4ConsFree=496 B
+M4EvtFree=528 B
+M4WorkFree=528 B
+
+SemProFree=288 B
+SemConFree=288 B
+MutexAFree=488 B
+MutexBFree=520 B
+
+Heap=4568 B
+MinHeap=4568 B
+```
+
+- Heap 对比：
+  - 调整前：6104 B。
+  - 调整后：4568 B。
+  - 差值：1536 B。
+  - 四个 Task 新增 Stack 总量约为 1536 B。
+  - Heap 实际变化与 Stack 配置变化一致。
+
+- 联合运行观察：
+  - Queue Sequence 持续连续。
+  - Queue Count 正常保持为 0。
+  - Thread Flags Set / Receive 持续对应。
+  - Semaphore Producer / Consumer 周期同步持续正常。
+  - Mutex `shared_op_seq` 和 `shared_value` 持续连续。
+  - Current Free Heap 与 Minimum Ever Free Heap 保持一致。
+  - 未观察到 Heap 持续下降。
+  - 未观察到 HardFault。
+  - 未观察到 Hang。
+  - 未观察到不可解释 Reset。
+  - 用户长期运行测试通过。
+
+- 最终构建结果：
+
+```text
+RAM=21112 B / 128 KB = 16.11%
+FLASH=33724 B / 1 MB = 3.22%
+
+text=33620
+data=96
+bss=21016
+dec=54732
+```
+
+- 结论：
+  - PASS。
+  - 初始同步 Task Stack 配置虽然能够运行，但安全余量不足。
+  - 经过基于 High Water Mark 的 Stack 调优后，四个新增同步 Task 均恢复合理余量。
+  - FreeRTOS Heap 变化与 Stack 增量一致。
+  - Queue、Thread Flags、Semaphore、Mutex 当前能够长期联合稳定运行。
+  - 当前 M4 同步机制阶段具备继续进入 Ring Buffer 的条件。
+
+- 修复 checkpoint：
+  - `c84fed8`：`fix: increase M4 synchronization task stack margins`

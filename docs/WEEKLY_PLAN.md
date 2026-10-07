@@ -11,9 +11,11 @@ M0～M3 已完成。
 
 M4.1 Queue Producer / Consumer baseline 已完成。
 
-M4.2 Task Notification / CMSIS-RTOS2 Thread Flags baseline 已完成正常通知、重复事件合并、资源和稳定性验证。
+M4.2 Task Notification / CMSIS-RTOS2 Thread Flags baseline 已完成。
 
-本周继续完成 M4，不提前进入 M5 ADC + Timer + DMA 实现。
+M4.3 Binary Semaphore、Mutex 对比、同步任务 Stack 调优和联合长期运行验证已完成。
+
+本周下一步进入 Ring Buffer 和 ISR → Task 通信边界，不提前进入 M5 ADC + Timer + DMA 实现。
 
 ## 本周核心目标
 
@@ -24,40 +26,46 @@ M4.2 Task Notification / CMSIS-RTOS2 Thread Flags baseline 已完成正常通知
 ## 本周任务
 
 1. 已完成：M4.2 Task → Task Thread Flags 正常通知实验。
-2. 已完成：验证 `osThreadFlagsWait(..., osWaitForever)` 阻塞等待与事件唤醒。
-3. 已完成：验证相同 Flag bit 重复 Set 的事件合并行为。
+2. 已完成：`osThreadFlagsWait(..., osWaitForever)` 阻塞等待与事件唤醒。
+3. 已完成：相同 Flag bit 重复 Set 的事件合并行为。
 4. 已完成：33 Sets → 11 Receives Burst 实验。
-5. 已完成：重新测量新增两个 Task 后的 Stack 和 FreeRTOS Heap。
-6. 已完成：M4.2 NRST ×3 和 Power-cycle ×3 Final Baseline 验证。
-7. 下一步：建立 M4.3 Binary Semaphore Task → Task 同步实验。
-8. 对比 Binary Semaphore 与现有 Debug Logger Mutex：
-   - Binary Semaphore：事件 / 同步。
-   - Mutex：共享资源所有权与互斥保护。
-9. Binary Semaphore 验证完成后实现独立 Ring Buffer。
-10. 验证 Ring Buffer：
+5. 已完成：Thread Flags 新增 Task Stack 和 FreeRTOS Heap 测量。
+6. 已完成：M4.2 Final Baseline 稳定性验证。
+7. 已完成：M4.3 Binary Semaphore Task → Task 同步实验。
+8. 已完成：Binary Semaphore 与 Mutex 职责对比。
+9. 已完成：`SharedDataMutex` 双 Task 共享数据互斥实验。
+10. 已完成：使用 `shared_op_seq` 验证真实临界区执行顺序。
+11. 已完成：Queue + Thread Flags + Semaphore + Mutex 联合长期运行。
+12. 已完成：发现 Semaphore / Mutex Task Stack 余量不足并完成调优。
+13. 已完成：Stack 调整后重新验证 High Water Mark 和 FreeRTOS Heap。
+14. 下一步：实现独立 Ring Buffer。
+15. 验证 Ring Buffer：
     - Empty。
     - Full。
     - Wrap-around。
     - Read / Write Index。
-11. 在 M4 后期建立最小 ISR → Task 通信边界实验。
-12. 完成 M4 Final Baseline 的 Stack、Heap、复位和断电稳定性验证。
-13. 完成 M4 文档关闭和 Git 收尾。
+    - 数据顺序。
+16. Ring Buffer 通过后建立最小 ISR → Task 通信边界实验。
+17. M4 最终关闭前核对 `freertos.c` 与 `m4_ipc` 模块边界。
+18. 完成 M4 Final Baseline 稳定性、文档和 Git 收尾。
 
 ## 验收标准
 
 - M4.1 Queue 已有独立功能和文档 checkpoint。
 - M4.2 Thread Flags 已有真实板级证据。
-- 能解释 Queue 与 Thread Flags 的职责差异。
-- 能解释为什么相同 Flag bit 的多次 Set 不等于多个排队事件。
-- Binary Semaphore 能稳定完成 Give / Take、阻塞等待和唤醒。
-- 能说明 Binary Semaphore 与 Mutex 在事件同步和资源所有权上的差异。
-- Ring Buffer 能正确处理 Empty、Full 和 Wrap-around。
-- ISR → Task 实验明确使用安全、非阻塞的通信边界。
+- Queue 与 Thread Flags 职责差异已明确。
+- 相同 Flag bit 事件合并语义已验证。
+- Binary Semaphore Give / Take、阻塞等待和唤醒已完成真实板级验证。
+- Binary Semaphore 与 Mutex 在事件同步和资源所有权上的差异已通过实机实验建立。
+- Mutex 共享数据 Read-Modify-Write 保护已通过 `shared_op_seq` 验证。
+- Queue + Thread Flags + Semaphore + Mutex 已完成联合长期运行。
+- 新增同步 Task Stack 已完成 High Water Mark 测量与调优。
+- FreeRTOS Heap 调整后保持稳定。
+- Ring Buffer 仍需完成 Empty、Full 和 Wrap-around。
+- ISR → Task 实验仍需明确安全、非阻塞的通信边界。
 - 当前同步 `LOG_xxx()` 不进入 ISR。
-- 新增重要 Task 或 RTOS Object 后重新检查 Stack 和 FreeRTOS Heap。
-- 临时压力参数全部在 Final Baseline 前恢复。
-- M4 完成后建立清晰的功能 checkpoint 和文档关闭 checkpoint。
-- 在 M4 正式关闭前不开始 M5 业务实现。
+- 临时压力参数全部必须在 Final Baseline 前恢复。
+- M4 正式关闭前不开始 M5 业务实现。
 
 ## 风险
 
