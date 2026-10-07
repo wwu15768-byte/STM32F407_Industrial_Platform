@@ -19,7 +19,6 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "FreeRTOS.h"
-#include "cmsis_os2.h"
 #include "task.h"
 #include "main.h"
 #include "cmsis_os.h"
@@ -72,28 +71,28 @@ const osThreadAttr_t UARTTask_attributes = {
 osThreadId_t SemProducerTaskHandle;
 const osThreadAttr_t SemProducerTask_attributes = {
   .name = "SemProducerTask",
-  .stack_size = 128 * 4,
+  .stack_size = 192 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for SemConsumerTask */
 osThreadId_t SemConsumerTaskHandle;
 const osThreadAttr_t SemConsumerTask_attributes = {
   .name = "SemConsumerTask",
-  .stack_size = 128 * 4,
+  .stack_size = 192 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for MutexTaskA */
 osThreadId_t MutexTaskAHandle;
 const osThreadAttr_t MutexTaskA_attributes = {
   .name = "MutexTaskA",
-  .stack_size = 128 * 4,
+  .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for MutexTaskB */
 osThreadId_t MutexTaskBHandle;
 const osThreadAttr_t MutexTaskB_attributes = {
   .name = "MutexTaskB",
-  .stack_size = 128 * 4,
+  .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for SharedDataMutex */
@@ -235,10 +234,18 @@ void StartUARTTask(void *argument)
     {
       uint32_t heartbeat_stack_free;
       uint32_t uart_stack_free;
+      uint32_t semproducer_stack_free;
+      uint32_t semconsumer_stack_free;
+      uint32_t mutex_a_stack_free;
+      uint32_t mutex_b_stack_free;
       size_t heap_free;
       size_t heap_min_free;
       heartbeat_stack_free = osThreadGetStackSpace(HeartBeatTaskHandle);
       uart_stack_free = osThreadGetStackSpace(UARTTaskHandle);
+      semproducer_stack_free = osThreadGetStackSpace(SemProducerTaskHandle);
+      semconsumer_stack_free = osThreadGetStackSpace(SemConsumerTaskHandle);
+      mutex_a_stack_free = osThreadGetStackSpace(MutexTaskAHandle);
+      mutex_b_stack_free = osThreadGetStackSpace(MutexTaskBHandle);
       heap_free = xPortGetFreeHeapSize();
       heap_min_free = xPortGetMinimumEverFreeHeapSize();
 
@@ -255,6 +262,13 @@ void StartUARTTask(void *argument)
          (unsigned long)M4Ipc_GetEventWorkStackFree(),
          (unsigned long)heap_free,
          (unsigned long)heap_min_free);
+
+         LOG_INFO("SYS",
+         "SemProFree=%lu B SemConFree=%lu B MutexAFree=%lu B MutexBFree=%lu B",
+         (unsigned long)semproducer_stack_free,
+         (unsigned long)semconsumer_stack_free,
+         (unsigned long)mutex_a_stack_free,
+         (unsigned long)mutex_b_stack_free);
     }
     osDelay(1000U);
   }
