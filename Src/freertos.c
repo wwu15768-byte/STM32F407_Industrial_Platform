@@ -51,7 +51,8 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-
+static uint32_t shared_value = 0U;
+static uint32_t shared_op_seq = 0U;
 /* USER CODE END Variables */
 /* Definitions for HeartBeatTask */
 osThreadId_t HeartBeatTaskHandle;
@@ -81,6 +82,25 @@ const osThreadAttr_t SemConsumerTask_attributes = {
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+/* Definitions for MutexTaskA */
+osThreadId_t MutexTaskAHandle;
+const osThreadAttr_t MutexTaskA_attributes = {
+  .name = "MutexTaskA",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for MutexTaskB */
+osThreadId_t MutexTaskBHandle;
+const osThreadAttr_t MutexTaskB_attributes = {
+  .name = "MutexTaskB",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for SharedDataMutex */
+osMutexId_t SharedDataMutexHandle;
+const osMutexAttr_t SharedDataMutex_attributes = {
+  .name = "SharedDataMutex"
+};
 /* Definitions for SyncSem */
 osSemaphoreId_t SyncSemHandle;
 const osSemaphoreAttr_t SyncSem_attributes = {
@@ -96,6 +116,8 @@ void StartHeartBeatTask(void *argument);
 void StartUARTTask(void *argument);
 void StartSemProducerTask(void *argument);
 void StartSemConsumerTask(void *argument);
+void StartMutexTaskA(void *argument);
+void StartMutexTaskB(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -108,6 +130,9 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
 
   /* USER CODE END Init */
+  /* Create the mutex(es) */
+  /* creation of SharedDataMutex */
+  SharedDataMutexHandle = osMutexNew(&SharedDataMutex_attributes);
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -145,6 +170,12 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of SemConsumerTask */
   SemConsumerTaskHandle = osThreadNew(StartSemConsumerTask, NULL, &SemConsumerTask_attributes);
+
+  /* creation of MutexTaskA */
+  MutexTaskAHandle = osThreadNew(StartMutexTaskA, NULL, &MutexTaskA_attributes);
+
+  /* creation of MutexTaskB */
+  MutexTaskBHandle = osThreadNew(StartMutexTaskB, NULL, &MutexTaskB_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -277,6 +308,76 @@ void StartSemConsumerTask(void *argument)
     }
   }
   /* USER CODE END StartSemConsumerTask */
+}
+
+/* USER CODE BEGIN Header_StartMutexTaskA */
+/**
+* @brief Function implementing the MutexTaskA thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartMutexTaskA */
+void StartMutexTaskA(void *argument)
+{
+  /* USER CODE BEGIN StartMutexTaskA */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1500);
+
+    if(osMutexAcquire(SharedDataMutexHandle, osWaitForever) == osOK)
+    {
+      uint32_t before = shared_value;
+
+      shared_value += 1U;
+
+      uint32_t after = shared_value;
+      uint32_t seq = ++shared_op_seq;
+      osMutexRelease(SharedDataMutexHandle);
+
+      LOG_INFO("M4M",
+               "seq=%lu A value=%lu->%lu",
+               (unsigned long)seq,
+               (unsigned long)before,
+               (unsigned long)after);
+    }
+  }
+  /* USER CODE END StartMutexTaskA */
+}
+
+/* USER CODE BEGIN Header_StartMutexTaskB */
+/**
+* @brief Function implementing the MutexTaskB thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartMutexTaskB */
+void StartMutexTaskB(void *argument)
+{
+  /* USER CODE BEGIN StartMutexTaskB */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1500);
+
+    if(osMutexAcquire(SharedDataMutexHandle, osWaitForever) == osOK)
+    {
+      uint32_t before = shared_value;
+
+      shared_value += 10U;
+
+      uint32_t after = shared_value;
+      uint32_t seq = ++shared_op_seq;
+      osMutexRelease(SharedDataMutexHandle);
+
+      LOG_INFO("M4M",
+               "seq=%lu B value=%lu->%lu",
+               (unsigned long)seq,
+               (unsigned long)before,
+               (unsigned long)after);
+    }
+  }
+  /* USER CODE END StartMutexTaskB */
 }
 
 /* Private application code --------------------------------------------------*/
