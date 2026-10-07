@@ -19,6 +19,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "FreeRTOS.h"
+#include "cmsis_os2.h"
 #include "task.h"
 #include "main.h"
 #include "cmsis_os.h"
@@ -66,6 +67,25 @@ const osThreadAttr_t UARTTask_attributes = {
   .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+/* Definitions for SemProducerTask */
+osThreadId_t SemProducerTaskHandle;
+const osThreadAttr_t SemProducerTask_attributes = {
+  .name = "SemProducerTask",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for SemConsumerTask */
+osThreadId_t SemConsumerTaskHandle;
+const osThreadAttr_t SemConsumerTask_attributes = {
+  .name = "SemConsumerTask",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for SyncSem */
+osSemaphoreId_t SyncSemHandle;
+const osSemaphoreAttr_t SyncSem_attributes = {
+  .name = "SyncSem"
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -74,6 +94,8 @@ const osThreadAttr_t UARTTask_attributes = {
 
 void StartHeartBeatTask(void *argument);
 void StartUARTTask(void *argument);
+void StartSemProducerTask(void *argument);
+void StartSemConsumerTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -95,6 +117,10 @@ void MX_FREERTOS_Init(void) {
   }
   /* USER CODE END RTOS_MUTEX */
 
+  /* Create the semaphores(s) */
+  /* creation of SyncSem */
+  SyncSemHandle = osSemaphoreNew(1, 0, &SyncSem_attributes);
+
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
   /* USER CODE END RTOS_SEMAPHORES */
@@ -113,6 +139,12 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of UARTTask */
   UARTTaskHandle = osThreadNew(StartUARTTask, NULL, &UARTTask_attributes);
+
+  /* creation of SemProducerTask */
+  SemProducerTaskHandle = osThreadNew(StartSemProducerTask, NULL, &SemProducerTask_attributes);
+
+  /* creation of SemConsumerTask */
+  SemConsumerTaskHandle = osThreadNew(StartSemConsumerTask, NULL, &SemConsumerTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -196,6 +228,55 @@ void StartUARTTask(void *argument)
     osDelay(1000U);
   }
   /* USER CODE END StartUARTTask */
+}
+
+/* USER CODE BEGIN Header_StartSemProducerTask */
+/**
+* @brief Function implementing the SemProducerTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartSemProducerTask */
+void StartSemProducerTask(void *argument)
+{
+  /* USER CODE BEGIN StartSemProducerTask */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(2000);
+
+    if(osSemaphoreRelease(SyncSemHandle) == osOK)
+    {
+      LOG_INFO("SYS",
+               "Producer Released");
+    }
+  }
+  /* USER CODE END StartSemProducerTask */
+}
+
+/* USER CODE BEGIN Header_StartSemConsumerTask */
+/**
+* @brief Function implementing the SemConsumerTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartSemConsumerTask */
+void StartSemConsumerTask(void *argument)
+{
+  /* USER CODE BEGIN StartSemConsumerTask */
+  /* Infinite loop */
+  for(;;)
+  {
+    LOG_INFO("SEM",
+             "Consumer Waiting");
+
+    if(osSemaphoreAcquire(SyncSemHandle, osWaitForever) == osOK)
+    {
+      LOG_INFO("SEM",
+               "Consumer Acquired");
+    }
+  }
+  /* USER CODE END StartSemConsumerTask */
 }
 
 /* Private application code --------------------------------------------------*/
