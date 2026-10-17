@@ -1371,3 +1371,271 @@ dec=54732
 
 - 修复 checkpoint：
   - `c84fed8`：`fix: increase M4 synchronization task stack margins`
+
+## TEST-20261016-01：M4 Ring Buffer Empty、Full、Wrap-around 确定性板级验证
+
+- 目标：
+  - 验证独立 Ring Buffer 的基本读写功能。
+  - 验证 Empty 状态和空读返回行为。
+  - 验证 Full 状态和满时拒绝写入行为。
+  - 验证 Full 时已有数据及读写索引不会被破坏。
+  - 验证 Read / Write Index 循环回绕。
+  - 验证 FIFO 数据读取顺序。
+  - 验证 `overflow_count` 累计溢出统计。
+
+- 测试环境：
+  - MCU：STM32F407VGT6。
+  - RTOS：FreeRTOS + CMSIS-RTOS2。
+  - 构建工具：CMake + Ninja + GNU Arm GCC。
+  - 调试日志：USART2 + `debug_log`。
+  - 当前分支：`feature/m4-rtos-communication-baseline`。
+  - 功能 checkpoint：`f8c3e52`。
+  - 测试方式：真实开发板运行。
+  - 测试任务：临时复用 `SemProducerTask` 和 `SemConsumerTask`。
+
+- Ring Buffer 配置：
+  - 模块：`Inc/ring_buffer.h`、`Src/ring_buffer.c`。
+  - 固定数组长度：8 B。
+  - 有效数据容量：7 B。
+  - 数据类型：`uint8_t`。
+  - Read Index：`tail`。
+  - Write Index：`head`。
+  - Empty 条件：`head == tail`。
+  - Full 条件：`(head + 1U) % RING_BUFF_SIZE == tail`。
+  - 使用预留一个空槽的设计。
+  - Full 时拒绝新数据写入。
+  - Full 写入失败时增加 `overflow_count`。
+  - Empty 读取失败时不修改输出数据。
+  - 不使用动态内存。
+  - Ring Buffer 核心模块不依赖 HAL / FreeRTOS。
+
+- 测试组织：
+  - 使用两个已有 Task 执行确定性测试。
+  - 使用 CMSIS-RTOS2 Thread Flags 控制测试阶段。
+  - 通过通知顺序避免生产者与消费者在同一测试阶段同时操作 Ring Buffer。
+  - 测试完成后两个 Task 进入周期 Delay。
+  - 该测试用于验证基础数据结构逻辑，不作为并发安全验收。
+
+- Empty 测试：
+  - 初始化 Ring Buffer。
+  - 确认 `head = 0`、`tail = 0`。
+  - 将输出变量预先设置为 `0xA5`。
+  - 尝试从空缓冲区读取。
+  - 期望返回 `RING_BUFF_ERROR_EMPTY`。
+  - 期望输出变量保持 `0xA5`。
+  - 期望 `RingBuffer_IsEmpty()` 返回 true。
+  - 实际输出：
+
+```text
+[I][RBTEST] EMPTY PASS
+```
+
+- 结论：
+  - PASS。
+  - Empty 判断符合预期。
+  - 空读没有错误修改调用者输出数据。
+
+- Full 测试：
+  - 连续写入 `0～6` 共 7 个字节。
+  - 前 7 次写入期望全部成功。
+  - 第 8 次尝试写入 `7`。
+  - 期望返回 `RING_BUFF_ERROR_FULL`。
+  - 期望 `overflow_count` 从 0 增加至 1。
+  - 期望 Full 时 `head` 和 `tail` 保持不变。
+  - 期望 `RingBuffer_IsFull()` 返回 true。
+  - 实际输出：
+
+```text
+[I][RBTEST] FULL PASS, overflow=1
+```
+
+- 结论：
+  - PASS。
+  - Ring Buffer 能够正确识别 Full。
+  - Full 时不会覆盖已有数据。
+  - 溢出计数符合预期。
+
+- Full 后读取验证：
+  - Consumer 连续读取两个字节。
+  - 期望依次获得 `0`、`1`。
+  - 期望读取后 `head = 7`、`tail = 2`。
+  - 实际输出：
+
+```text
+[I][RBTEST] FULL READ PASS
+```
+
+- 结论：
+  - PASS。
+  - 满缓冲区拒绝写入没有破坏原有 FIFO 数据。
+  - 读取后能够释放缓冲区空间。
+
+- Wrap-around 写入验证：
+  - 在 `head = 7`、`tail = 2` 的条件下继续写入。
+  - 写入数据 `7`、`8`。
+  - 两次写入期望全部成功。
+  - 写入索引预期变化：`7 → 0 → 1`。
+  - 期望最终 `head = 1`、`tail = 2`。
+  - 期望重新进入 Full 状态。
+  - 期望 `overflow_count` 保持为 1。
+  - 实际输出：
+
+```text
+[I][RBTEST] WRAP WRITE PASS, head=1 tail=2
+```
+
+- 结论：
+  - PASS。
+  - Write Index 能够正确循环回绕。
+  - 回绕后 Full 判断正确。
+
+- Wrap-around 读取验证：
+  - 连续读取剩余 7 个字节。
+  - 期望读取顺序为 `2、3、4、5、6、7、8`。
+  - 期望 Read Index 正确循环回绕。
+  - 期望最终 `head = 1`、`tail = 1`。
+  - 期望 Ring Buffer 恢复 Empty。
+  - 再次空读应返回 `RING_BUFF_ERROR_EMPTY`。
+  - 实际输出：
+
+```text
+[I][RBTEST] WRAP READ PASS, head=1 tail=1
+[I][RBTEST] Consumer test finished
+[I][RBTEST] Producer test finished
+```
+
+- 结论：
+  - PASS。
+  - FIFO 数据顺序正确。
+  - Read Index 回绕正确。
+  - 读写索引最终一致。
+  - 缓冲区正确恢复 Empty。
+
+- 综合验收：
+
+```text
+EMPTY       PASS
+FULL        PASS
+FULL READ   PASS
+WRAP WRITE  PASS
+WRAP READ   PASS
+
+overflow_count = 1
+Final head     = 1
+Final tail     = 1
+```
+
+- 最终结论：
+  - PASS。
+  - Ring Buffer 基本读写通过确定性板级验证。
+  - Empty / Full / Wrap-around 全部通过。
+  - FIFO 数据完整性在本次测试序列中符合预期。
+  - 满时拒绝写入和溢出计数符合预期。
+  - 可以将 M4 Ring Buffer 基础功能标记为已完成。
+
+- 边界：
+  - 当前采用单字节读写 API。
+  - 当前测试使用 Thread Flags 串行协调读写阶段。
+  - 未验证真正同时发生的 Producer / Consumer 数据访问。
+  - 未验证 ISR → Task 并发访问。
+  - 未验证内存可见性和原子访问条件。
+  - 未验证覆盖旧数据模式。
+  - 未验证 DMA Buffer Ownership。
+  - 当前结果不代表已经实现线程安全或 ISR-safe Ring Buffer。
+  - 当前测试不能代表 M4 Final Baseline 已完成。
+
+- 功能 checkpoint：
+  - `f8c3e52`：`feat: establish M4 ring buffer baseline`。
+  - 已推送至 `origin/feature/m4-rtos-communication-baseline`。
+
+
+## TEST-20261016-02：M4 Ring Buffer 测试期间多模块运行与资源观察
+
+- 目标：
+  - 观察 Ring Buffer 测试完成后其他 M4 模块的运行情况。
+  - 测量 FreeRTOS Task Stack High Water Mark。
+  - 检查 Current Free Heap 和 Minimum Ever Free Heap。
+  - 检查是否出现明显的任务异常或资源持续下降。
+
+- 测试条件：
+  - 使用已经通过 Empty / Full / Wrap-around 的固件。
+  - Ring Buffer 测试任务完成后保持存活并进入 Delay。
+  - M4 Queue、Thread Flags、Mutex 和 UART 继续运行。
+  - 当前 Semaphore 两个 Task 临时用于 Ring Buffer 测试。
+  - 因此本次不能代表原 Binary Semaphore 行为已重新完成回归。
+
+- 观察：
+  - Ring Buffer 五项检查均输出 PASS。
+  - Queue 接收序号从 1 连续增长至 46。
+  - Queue 当前日志中未观察到 Sequence Gap。
+  - Queue Get 后 Count 持续为 0。
+  - Thread Flags Set / Receive 计数持续对应。
+  - Thread Flags 当前事件位为 `0x00000001`。
+  - Mutex A / B 共享数据更新连续。
+  - UART 周期输出 `USART2 TX OK`。
+
+- 实际日志：
+
+```text
+[I][M4Q] rx seq=46 value=460 tick=9002 count=0
+[I][M4M] seq=11 A value=55->56
+[I][M4M] seq=12 B value=56->66
+[I][M4F] set event, count=9 flags=0x00000001
+[I][M4F] event received, count=9 flags=0x00000001
+[I][UART] USART2 TX OK
+```
+
+- 实际资源观察：
+
+```text
+HeartFree=384 B
+UARTFree=488 B
+M4ProdFree=808 B
+M4ConsFree=496 B
+M4EvtFree=504 B
+M4WorkFree=528 B
+
+SemProFree=248 B
+SemConFree=256 B
+MutexAFree=520 B
+MutexBFree=520 B
+
+Heap=4568 B
+MinHeap=4568 B
+```
+
+- 资源分析：
+  - 当前观察窗口中 Heap 与 MinHeap 均为 4568 B。
+  - 与 M4.3 同步任务 Stack 调优后的 Heap 记录一致。
+  - 未观察到 FreeRTOS Heap 进一步下降。
+  - SemProducerTask 剩余 Stack 为 248 B。
+  - SemConsumerTask 剩余 Stack 为 256 B。
+  - 两个临时测试任务需要继续关注最坏路径 Stack 余量。
+  - 当前没有重新测量新增代码的 Flash / RAM 构建大小，不沿用旧数据作为新版本结果。
+
+- 稳定性观察：
+  - 日志覆盖约 9 秒的运行窗口。
+  - 当前窗口内未观察到 HardFault。
+  - 未观察到 Hang。
+  - 未观察到 Queue Sequence Gap。
+  - 未观察到 Thread Flags 正常周期通知异常。
+  - 未观察到 Mutex 共享数据覆盖。
+  - 未观察到 Heap 持续下降。
+
+- 结论：
+  - PASS，针对本次短时多模块运行观察。
+  - Ring Buffer 确定性测试完成后，Queue、Thread Flags、Mutex 和 UART 仍继续正常输出。
+  - FreeRTOS Heap 当前观察值保持稳定。
+  - 本次未执行完整长期稳定性与复位恢复验收。
+
+- 未覆盖：
+  - 原 Binary Semaphore 功能的本轮回归。
+  - ISR → Task 通信。
+  - Ring Buffer 并发安全。
+  - M4 Final Baseline 长期运行。
+  - NRST ×3。
+  - Power-cycle ×3。
+  - 新版本完整 Flash / RAM 占用对比。
+
+- 功能 checkpoint：
+  - `f8c3e52`：`feat: establish M4 ring buffer baseline`。

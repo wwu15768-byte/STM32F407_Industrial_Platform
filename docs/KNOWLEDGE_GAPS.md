@@ -621,3 +621,165 @@ Mutex 共享数据基础互斥行为已通过真实硬件验证。
 同步任务 Stack 资源调优方法已完成实机验证。
 
 Ring Buffer、ISR → Task、Priority Inheritance 和 DMA Buffer Ownership 仍待后续验证。
+
+## KG-009：Ring Buffer、FIFO、溢出统计与 ISR / Task 数据所有权
+
+### 来源
+
+M4 Ring Buffer 独立模块开发、C 指针错误修正、FreeRTOS 双 Task 确定性测试、溢出统计设计和真实 STM32F407VGT6 板级验证过程。
+
+### 当前理解
+
+已经通过实际编程和板级测试掌握 Ring Buffer 基础数据结构。
+
+当前理解：
+
+- Ring Buffer 使用固定容量数组循环存储数据。
+- head 指向下一个写入位置。
+- tail 指向下一个读取位置。
+- head 和 tail 使用数组索引，而不是直接保存数据值。
+- 使用预留一个空槽可以避免 Empty / Full 状态歧义。
+- Empty 判断为 head == tail。
+- Full 判断为 (head + 1U) % SIZE == tail。
+- 物理数组长度为 8 时，有效容量为 7。
+- 成功写入后才移动 head。
+- 成功读取后才移动 tail。
+- Full 写入失败不能破坏已有数据。
+- Empty 读取失败不能修改输出数据。
+- 对索引取模可以完成循环回绕。
+- FIFO 表示先写入的数据先被读取。
+- RingBufferStatus_t 用于区分成功、Full、Empty 和非法参数。
+- 调用者必须检查 ReadByte / WriteByte 的返回状态。
+- 不能将日志打印视为操作成功的证据。
+- overflow_count 应记录实际发生的溢出写入事件。
+- 不能将多次检查到 Full 直接等同于多次数据丢失。
+- 当前 Full 策略为拒绝新数据，不覆盖旧数据。
+- 覆盖旧数据和丢弃新数据适用于不同业务要求。
+- Ring Buffer 只能吸收有限的短期数据积压。
+- 如果长期生产速度大于消费速度，增加 Buffer 容量只能推迟溢出。
+- 优化 Consumer 处理能力通常比单纯增加容量更重要。
+- 数据丢失统计和告警对于工业采集系统具有实际意义。
+
+已完成确定性板级测试：
+
+```text
+EMPTY       PASS
+FULL        PASS
+FULL READ   PASS
+WRAP WRITE  PASS
+WRAP READ   PASS
+```
+
+当前测试结果：
+
+```text
+overflow_count = 1
+Final head     = 1
+Final tail     = 1
+```
+
+当前能够解释为什么这些结果符合 Ring Buffer 的设计预期。
+
+### 缺少什么
+
+尚未实际掌握和验证：
+
+- Ring Buffer SPSC 并发模型。
+- 单 Producer / 单 Consumer 的索引写入所有权。
+- ISR 与 Task 共享变量的原子访问条件。
+- volatile 的作用和局限。
+- 编译器优化与内存访问顺序。
+- 必要的内存屏障和同步策略。
+- ISR → Task 的最小数据交接过程。
+- CMSIS-RTOS2 ISR-safe API 的实际限制。
+- 多生产者 / 多消费者 Ring Buffer 的复杂性。
+- 覆盖旧数据时对 tail 所有权的影响。
+- 数据丢失告警和恢复状态机。
+- DMA Half / Full Buffer Ownership。
+- 采样数据批量搬运与消费任务处理能力预算。
+
+### 为什么重要
+
+M5 ADC + Timer + DMA 将持续产生采样数据。
+
+后续 M6 UART DMA + IDLE 和其他通信模块也可能产生连续数据流。
+
+如果 Ring Buffer 和同步边界设计错误，可能造成：
+
+- 数据覆盖。
+- 数据丢失。
+- FIFO 顺序破坏。
+- 重复读取。
+- 读取尚未写入完成的数据。
+- 读写索引竞争。
+- 丢失中断事件。
+- Consumer 无法及时处理数据。
+- 实际故障被不准确的日志掩盖。
+- 工业采集结果不可靠。
+
+因此，M4 不仅需要 Ring Buffer 基础算法，还需要继续建立 ISR / Task 数据交接的正确边界。
+
+### 学习优先级
+
+Ring Buffer 基础数据结构已经完成。
+
+下一优先级：
+
+1. CMSIS-RTOS2 ISR-safe API。
+2. ISR → Task 最小通信实验。
+3. SPSC Ring Buffer 数据所有权。
+4. 原子性、volatile 与内存可见性。
+5. ISR / Task 并发数据一致性。
+6. ADC DMA Buffer Ownership。
+7. 数据丢失统计与告警策略。
+
+### 学习任务
+
+- 复习当前 RingBuffer_t 的 head / tail 所有权。
+- 研究 ISR 与 Task 访问共享状态的约束。
+- 阅读 CMSIS-RTOS2 中断上下文 API 规则。
+- 建立最小中断通知任务实验。
+- 验证 Task 阻塞等待与唤醒。
+- 避免在 ISR 中使用当前同步 Logger。
+- 建立可重复的数据顺序和完整性验证。
+- 根据实验结果决定 Ring Buffer 是否需要增加同步机制。
+- 为后续 DMA 数据缓冲建立独立所有权规则。
+
+### 小实验
+
+已完成：
+
+- Ring Buffer 初始化。
+- Empty 判断。
+- Full 判断。
+- Full 写入失败。
+- Full 后已有数据保留。
+- FIFO 数据读取。
+- Read Index 回绕。
+- Write Index 回绕。
+- Empty 再次读取。
+- overflow_count 增量验证。
+- 双 Task Thread Flags 阶段同步测试。
+- 五个测试阶段全部 PASS。
+- Ring Buffer 测试期间 Stack / Heap 观测。
+
+待完成：
+
+- ISR → Task 通知实验。
+- ISR-safe API 验证。
+- SPSC 并发读写实验。
+- 内存可见性与必要同步验证。
+- 并发情况下的溢出统计正确性。
+- M5 DMA Buffer Ownership 实验。
+
+### 状态
+
+Ring Buffer 基础原理已掌握。
+
+Ring Buffer 单线程语义和串行协调的双 Task 确定性功能测试已经通过真实开发板验证。
+
+Full / Empty / Wrap-around 和 FIFO 顺序已完成验收。
+
+当前基础功能 checkpoint 为 `f8c3e52`。
+
+ISR / Task 并发安全、覆盖模式、DMA 数据所有权和正式工业级告警机制仍待后续学习与验证。

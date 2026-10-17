@@ -1380,3 +1380,242 @@ dec  = 54732
 下一步优先实现独立 Ring Buffer，验证 Empty、Full、Wrap-around、Read / Write Index 和基础数据完整性。Ring Buffer 正常路径和边界通过后，再建立最小 ISR → Task 通信实验，明确 ISR-safe API、非阻塞边界和任务唤醒行为。
 
 同时在 M4 最终关闭前检查 Semaphore / Mutex 实验代码与 `DEC-20260930-01` 的 `m4_ipc` 模块边界是否需要统一。
+
+
+# 2026-10-16
+
+## 今日计划
+
+- 整理 2026-10-13 至 2026-10-16 的 M4 Ring Buffer 开发成果。
+- 完成独立 Ring Buffer 基础模块。
+- 验证 Empty、Full、Wrap-around 和 FIFO 数据顺序。
+- 验证 Full 时拒绝写入和溢出计数。
+- 使用已有 FreeRTOS Task 建立确定性板级测试。
+- 检查 Queue、Thread Flags、Mutex 和 UART 的运行情况。
+- 检查 Task Stack High Water Mark 和 FreeRTOS Heap。
+- 完成功能代码检查、构建检查、Git 提交和远程推送。
+- 准备 M4.5 ISR → Task 通信实验。
+
+## 实际完成
+
+- 完成独立 Ring Buffer 模块：
+  - `Inc/ring_buffer.h`
+  - `Src/ring_buffer.c`
+- 通过根目录 `CMakeLists.txt` 将 Ring Buffer 加入固件构建。
+- 使用静态固定容量数组，不使用动态内存。
+- Ring Buffer 当前物理数组长度为 8 B。
+- 使用预留一个空槽的设计，实际有效容量为 7 B。
+- 使用 `head` 记录下一写入索引。
+- 使用 `tail` 记录下一读取索引。
+- Empty 判断：
+
+```c
+head == tail
+```
+
+- Full 判断：
+
+```c
+(head + 1U) % RING_BUFF_SIZE == tail
+```
+
+- 已实现：
+  - `RingBuffer_Init()`。
+  - `RingBuffer_WriteByte()`。
+  - `RingBuffer_ReadByte()`。
+  - `RingBuffer_IsEmpty()`。
+  - `RingBuffer_IsFull()`。
+- 已实现满时拒绝写入。
+- 已实现 `overflow_count` 累计溢出统计。
+- 已明确 Empty 时读取失败不修改输出变量。
+- 已明确 Full 时写入失败不移动读写索引。
+- Ring Buffer 核心代码不依赖 HAL / FreeRTOS。
+
+- 开发过程中修正：
+  - 将 head / tail 统一为数组索引，不再与指针混用。
+  - 修正结构体指针空值检查。
+  - 修正写入和读取时的数据访问方式。
+  - 增加索引循环回绕。
+  - 统一头文件与源文件中的宏名称。
+  - 统一 RingBufferStatus_t 错误码。
+  - 修正 `uint8_t *` 输出参数的使用。
+  - 消费者改为只在读取成功时输出数据。
+  - 不再依据历史 overflow_count 决定额外读取次数。
+
+- 临时复用：
+  - `SemProducerTask`
+  - `SemConsumerTask`
+- 使用 CMSIS-RTOS2 Thread Flags 控制测试阶段。
+- 依次完成：
+  - Empty。
+  - Full。
+  - Full Read。
+  - Wrap Write。
+  - Wrap Read。
+- 实际输出：
+
+```text
+[I][RBTEST] EMPTY PASS
+[I][RBTEST] FULL PASS, overflow=1
+[I][RBTEST] FULL READ PASS
+[I][RBTEST] WRAP WRITE PASS, head=1 tail=2
+[I][RBTEST] WRAP READ PASS, head=1 tail=1
+[I][RBTEST] Consumer test finished
+[I][RBTEST] Producer test finished
+```
+
+- 已确认：
+  - Full 时能够拒绝新数据。
+  - 溢出计数能够从 0 增加到 1。
+  - Full 后能够正确读取已有数据。
+  - Write Index 能够由 7 回绕至 0。
+  - Read Index 能够正确回绕。
+  - FIFO 数据顺序正确。
+  - 最终 head 和 tail 均为 1。
+  - 最终 Ring Buffer 恢复 Empty。
+
+- 同一固件中继续观察到：
+  - Queue Sequence 连续增长至 46。
+  - Queue Count 正常。
+  - Thread Flags Set / Receive 计数对应。
+  - Mutex 共享数据更新连续。
+  - UART 周期输出正常。
+
+- 当前板级资源：
+
+```text
+HeartFree=384 B
+UARTFree=488 B
+M4ProdFree=808 B
+M4ConsFree=496 B
+M4EvtFree=504 B
+M4WorkFree=528 B
+
+SemProFree=248 B
+SemConFree=256 B
+MutexAFree=520 B
+MutexBFree=520 B
+
+Heap=4568 B
+MinHeap=4568 B
+```
+
+- 当前测试日志约覆盖 9 秒。
+- 未观察到 HardFault、Hang 或 Heap 持续下降。
+- 本轮未执行完整 NRST / Power-cycle 验证。
+- 本轮未验证真正的 ISR → Task 并发访问。
+
+## 验收情况
+
+- Ring Buffer 独立模块建立：完成。
+- Ring Buffer 初始化：通过。
+- Ring Buffer Empty：PASS。
+- Ring Buffer Full：PASS。
+- Full 后原有数据保留：PASS。
+- Ring Buffer Write Index Wrap-around：PASS。
+- Ring Buffer Read Index Wrap-around：PASS。
+- FIFO 数据顺序：PASS。
+- Full 写入失败和 overflow_count：PASS。
+- Empty 读取失败与输出数据保护：PASS。
+- Ring Buffer 确定性板级测试：通过。
+- CMake + Ninja + GNU Arm GCC 构建：提交前检查通过。
+- Queue、Thread Flags、Mutex、UART 短时联合运行观察：通过。
+- FreeRTOS Heap 运行时观察：完成。
+- Git 功能 checkpoint：完成。
+- Git 远程同步：完成。
+- Ring Buffer 基础功能验收：通过。
+- Ring Buffer 并发安全：未验收。
+- M4 Final Baseline：未验收。
+
+## 未完成
+
+- 当前两个 Semaphore Task 被临时用于 Ring Buffer 测试。
+- 原 Binary Semaphore 功能尚未在最新测试固件中重新回归。
+- 需要恢复或隔离临时测试入口。
+- ISR → Task 通信尚未实现和验证。
+- ISR-safe API、非阻塞边界尚未实机验证。
+- Ring Buffer SPSC 并发安全尚未验证。
+- ISR 与 Task 之间的索引所有权和内存可见性尚未验证。
+- M4 最终联合稳定性和复位恢复验证尚未完成。
+- Semaphore / Mutex 实验代码与 `m4_ipc` 模块边界仍需整理。
+- M4 整体尚未关闭。
+- M5 ADC + Timer + DMA 尚未开始。
+
+## 今日 Bug
+
+- 本轮开发中曾出现：
+  - 结构体指针与数组索引混用。
+  - Ring Buffer 宏名称和错误码不一致。
+  - ReadByte 输出参数类型不匹配。
+  - 未检查读取返回值导致重复输出旧数据。
+  - 使用累计 overflow_count 控制额外读取次数。
+- 已通过修正实现和返回值判断解决。
+- Ring Buffer 确定性测试全部 PASS。
+- 当前没有通过本次日志确认的新运行时固件故障。
+- 这些已修复问题不作为当前未解决 Known Bug。
+
+## 今日学习
+
+- 理解使用 head / tail 构建 Ring Buffer 的基本原理。
+- 理解预留一个空槽区分 Empty / Full。
+- 理解物理容量和有效容量的区别。
+- 理解索引取模实现循环回绕。
+- 理解失败操作不应破坏已有数据和状态。
+- 理解 C 指针、结构体指针和数组索引的区别。
+- 理解函数返回状态需要由调用者检查。
+- 理解日志输出不等于操作成功。
+- 理解数据丢失统计必须具有明确语义。
+- 理解缓冲区容量只能吸收短期突发。
+- 理解长期生产速度高于消费速度会持续积压。
+- 理解使用 Thread Flags 串行测试阶段可以提高结果确定性。
+- 理解 Ring Buffer 功能测试通过不等于并发安全通过。
+
+## 尚未理解
+
+- Cortex-M4 上 ISR / Task 共享索引的完整内存访问约束。
+- `volatile`、原子性和内存顺序的具体区别。
+- SPSC Ring Buffer 的严格并发所有权设计。
+- 当 Producer 覆盖旧数据时如何避免与 Consumer 竞争 tail。
+- CMSIS-RTOS2 不同 API 在 ISR context 下的使用限制。
+- ISR → Task 最小通知链路的具体实现。
+- DMA Half / Full 事件与数据 Buffer Ownership 的关系。
+- 工业数据丢失告警、高水位和恢复机制的正式设计。
+
+## Git
+
+- Branch：`feature/m4-rtos-communication-baseline`。
+- 功能 checkpoint：
+  - `f8c3e52`：`feat: establish M4 ring buffer baseline`
+- 前一个文档 checkpoint：
+  - `5c9efac`：`docs: record M4 synchronization baseline verification`
+- 功能提交包含：
+  - `CMakeLists.txt`
+  - `Inc/ring_buffer.h`
+  - `Src/ring_buffer.c`
+  - `Src/freertos.c`
+- 提交前已执行 Git 暂存区检查。
+- 功能代码已提交本地仓库。
+- 已成功执行 `git push`。
+- 远程分支：`origin/feature/m4-rtos-communication-baseline`。
+- 功能提交已推送至远程。
+- 文档同步修改将另行形成 checkpoint。
+
+## 明天下一步
+
+继续 M4，不进入 M5。
+
+首先完成 Ring Buffer 文档同步和独立文档 Git checkpoint。
+
+随后恢复或隔离临时 Ring Buffer 测试任务，确保原 Semaphore 功能可以重新验证。
+
+下一项核心任务为 M4.5 ISR → Task 通信：
+
+1. 选择一个最小、可控的中断事件源。
+2. 核对 CMSIS-RTOS2 ISR-safe API。
+3. 建立 ISR 通知 Task 的最小链路。
+4. 保证 ISR 不执行同步 UART 日志或阻塞操作。
+5. 验证 Task 阻塞、唤醒和事件处理顺序。
+6. 再研究 Ring Buffer SPSC 并发数据交接。
+7. 重新测量 Stack 和 FreeRTOS Heap。
+
+完成 ISR → Task 后再开展 M4 最终模块整理、联合稳定性和复位恢复验证。

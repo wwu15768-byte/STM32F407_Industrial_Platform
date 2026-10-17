@@ -112,3 +112,125 @@ STM32 完整订货型号中的封装与容量字符会直接影响引脚和工�
 ```
 
 记录时保留真实排查过程，明确区分事实、假设、已证实和未证实内容。
+
+## ERR-20261016-01：Ring Buffer 消费者未检查读取状态导致旧数据重复打印
+
+### 日期
+
+2026-10-16。
+
+### 模块
+
+M4 Ring Buffer / FreeRTOS Consumer Task / Debug Logger。
+
+### 当前环境
+
+- STM32F407VGT6。
+- FreeRTOS + CMSIS-RTOS2。
+- USART2 同步日志。
+- 临时复用 SemProducerTask / SemConsumerTask。
+- Ring Buffer 使用固定容量数组和满时拒绝写入策略。
+
+### 问题现象
+
+初始 Ring Buffer 测试中，串口日志出现同一数据值被连续输出的情况。
+
+例如：
+
+```text
+[I][RIB] value acquired: 14
+[I][RIB] overflow turn: 1
+[I][RIB] value acquired: 14
+```
+
+### 期望行为
+
+- 读取成功时输出本次读取的数据。
+- 读取失败时不将旧变量值打印为新数据。
+- overflow_count 只表示历史溢出写入次数，不决定当前可读取数据数量。
+
+### 实际行为
+
+- Consumer 未检查 RingBuffer_ReadByte 返回状态。
+- 即使读取失败，也可能继续打印 value_acquired 的旧值。
+- overflow_count 大于 0 后，Consumer 额外执行读取。
+- 日志存在误导性重复数据。
+
+### 复现步骤
+
+1. 使用初始 Ring Buffer Consumer 测试代码。
+2. 连续运行 Producer / Consumer。
+3. 使 Ring Buffer 出现一次 Full 写入失败。
+4. 保持 overflow_count 大于 0。
+5. Consumer 每轮执行额外读取。
+6. 在缓冲区数据不足时观察重复输出旧值。
+
+### 已知事实
+
+- RingBuffer_ReadByte 使用返回状态区分读取成功与 Empty。
+- Empty 读取失败时不应修改输出数据。
+- overflow_count 为累计历史统计。
+- 初始 Consumer 没有完整检查 ReadByte 返回值。
+- 修改后重复打印现象未再出现。
+
+### 初始假设
+
+可能是 Ring Buffer FIFO 顺序或索引回绕存在错误。
+
+### 验证过程
+
+- 检查 Consumer 读取代码。
+- 发现读取后立即打印，没有判断返回状态。
+- 发现使用 overflow_count 大于 0 作为额外读取条件。
+- 将数据变量统一为 uint8_t。
+- 增加 RingBufferStatus_t 返回状态判断。
+- 只有 RING_BUFF_OK 时才打印读取数据。
+- 不再使用累计 overflow_count 控制额外读取次数。
+- 后续完成 Empty / Full / Wrap-around 确定性测试。
+- 五个测试阶段均输出 PASS。
+
+### 根本原因
+
+Consumer 将累计溢出历史误当作当前缓冲区数据状态，并且没有检查读取函数的返回值。
+
+读取失败后，旧输出变量值仍被打印，使日志看起来像重复读取了相同数据。
+
+### 解决方案
+
+- 每次调用 RingBuffer_ReadByte 后检查返回状态。
+- 只有读取成功才使用输出数据。
+- Empty 作为正常边界单独处理。
+- overflow_count 仅用于统计和告警，不决定读取次数。
+- 使用返回状态和确定性测试验证实际行为。
+
+### 验证结果
+
+- 修改后未再观察到原有重复旧值日志。
+- Empty 确定性测试 PASS。
+- Full 确定性测试 PASS。
+- FIFO 和 Wrap-around 确定性测试 PASS。
+- Ring Buffer 功能 checkpoint：`f8c3e52`。
+
+### 为什么会犯这个错误
+
+- 将函数调用与操作成功混为一谈。
+- 没有先检查返回值再使用输出参数。
+- 没有区分历史溢出统计与当前数据可用状态。
+- 在测试阶段过度依赖日志内容而没有验证日志对应的操作状态。
+
+### 如何避免再次发生
+
+- 所有可能失败的数据读取 API 必须检查返回状态。
+- 读取失败后不得将旧值当作新数据处理。
+- 为 Full / Empty / Timeout / Invalid Argument 建立明确的处理分支。
+- 数据丢失计数与 Buffer 当前状态分别管理。
+- 对异常路径进行确定性测试。
+- 日志必须准确反映操作成功或失败。
+
+### 我学到了什么
+
+- 工业采集系统中，错误日志本身可能造成错误的数据判断。
+- 不能只根据数值输出判断 FIFO 是否正确。
+- 返回状态和输出数据必须一起验证。
+- 累计统计量不能直接代表当前 Buffer 状态。
+- 确定性测试比依赖任务运行时序更容易定位边界错误。
