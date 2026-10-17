@@ -42,7 +42,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define RINGBUFFER_OR_SEMAPHORBINARY  1U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -54,7 +54,9 @@
 /* USER CODE BEGIN Variables */
 static uint32_t shared_value = 0U;
 static uint32_t shared_op_seq = 0U;
+#if(RINGBUFFER_OR_SEMAPHORBINARY == 0U)
 static RingBuffer_t ring_buffer;
+#endif
 /* USER CODE END Variables */
 /* Definitions for HeartBeatTask */
 osThreadId_t HeartBeatTaskHandle;
@@ -111,6 +113,7 @@ const osSemaphoreAttr_t SyncSem_attributes = {
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
+#if (RINGBUFFER_OR_SEMAPHORBINARY == 0U)
 #define RB_TEST_FLAG (1UL << 0)
 
 static bool RB_TestWait(void)
@@ -134,6 +137,7 @@ static bool RB_TestNotify(osThreadId_t task)
 
     return (result & osFlagsError) == 0U;
 }
+#endif
 /* USER CODE END FunctionPrototypes */
 
 void StartHeartBeatTask(void *argument);
@@ -310,138 +314,150 @@ void StartUARTTask(void *argument)
 
 void StartSemProducerTask(void *argument)
 {
-    /* USER CODE BEGIN StartSemProducerTask */
+  /* USER CODE BEGIN StartSemProducerTask */
+# if (RINGBUFFER_OR_SEMAPHORBINARY == 0U)
+  (void)argument;
 
-    (void)argument;
+  uint32_t failures = 0U;
+  RingBufferStatus_t status;
 
-    uint32_t failures = 0U;
-    RingBufferStatus_t status;
+  /* 等待 Consumer 就绪 */
+  if (!RB_TestWait())
+  {
+      LOG_INFO("RBTEST", "Producer sync FAIL");
+      for (;;) { osDelay(1000U); }
+  }
 
-    /* 等待 Consumer 就绪 */
-    if (!RB_TestWait())
+  RingBuffer_Init(&ring_buffer);
+
+  if (ring_buffer.overflow_count != 0U)
+  {
+      failures++;
+  }
+
+  /* 通知 Consumer 执行 Empty 测试 */
+  if (!RB_TestNotify(SemConsumerTaskHandle) ||
+      !RB_TestWait())
+  {
+      LOG_INFO("RBTEST", "Empty sync FAIL");
+      for (;;) { osDelay(1000U); }
+  }
+
+  /* ========== FULL 测试 ========== */
+
+  /* 容量为 7，写入 0～6 */
+  for (uint32_t i = 0U; i < 7U; i++)
+  {
+      status = RingBuffer_WriteByte(
+          &ring_buffer, i
+      );
+
+      if (status != RING_BUFF_OK)
+      {
+          failures++;
+      }
+  }
+
+  uint32_t old_head = ring_buffer.head;
+  uint32_t old_tail = ring_buffer.tail;
+  uint32_t old_overflow =
+      ring_buffer.overflow_count;
+
+  /* 第 8 次写入：应返回 FULL */
+  status = RingBuffer_WriteByte(
+      &ring_buffer, 7U
+  );
+
+  if (status != RING_BUFF_ERROR_FULL)
+  {
+      failures++;
+  }
+
+  if (ring_buffer.head != old_head ||
+      ring_buffer.tail != old_tail ||
+      ring_buffer.overflow_count != old_overflow + 1U ||
+      !RingBuffer_IsFull(&ring_buffer))
+  {
+      failures++;
+  }
+
+  LOG_INFO("RBTEST",
+            "FULL %s, overflow=%lu",
+            failures == 0U ? "PASS" : "FAIL",
+            (unsigned long)ring_buffer.overflow_count);
+
+  /* 通知 Consumer 读取 0、1 */
+  if (!RB_TestNotify(SemConsumerTaskHandle) ||
+      !RB_TestWait())
+  {
+      LOG_INFO("RBTEST", "Full sync FAIL");
+      for (;;) { osDelay(1000U); }
+  }
+
+  /* ========== WRAP-AROUND 写入 ========== */
+
+  /* 现在 head=7, tail=2 */
+
+  bool wrap_write_ok = true;
+
+  status = RingBuffer_WriteByte(
+      &ring_buffer, 7U
+  );
+  if (status != RING_BUFF_OK)
+  {
+      wrap_write_ok = false;
+  }
+
+  status = RingBuffer_WriteByte(
+      &ring_buffer, 8U
+  );
+  if (status != RING_BUFF_OK)
+  {
+      wrap_write_ok = false;
+  }
+
+  /* head: 7 -> 0 -> 1 */
+  if (ring_buffer.head != 1U ||
+      ring_buffer.tail != 2U ||
+      !RingBuffer_IsFull(&ring_buffer) ||
+      ring_buffer.overflow_count != 1U)
+  {
+      wrap_write_ok = false;
+  }
+
+  LOG_INFO("RBTEST",
+            "WRAP WRITE %s, head=%lu tail=%lu",
+            wrap_write_ok ? "PASS" : "FAIL",
+            (unsigned long)ring_buffer.head,
+            (unsigned long)ring_buffer.tail);
+
+  /* 通知 Consumer 验证 2～8 */
+  if (!RB_TestNotify(SemConsumerTaskHandle) ||
+      !RB_TestWait())
+  {
+      LOG_INFO("RBTEST", "Wrap sync FAIL");
+      for (;;) { osDelay(1000U); }
+  }
+
+  LOG_INFO("RBTEST", "Producer test finished");
+
+  for (;;)
+  {
+      osDelay(1000U);
+  }
+#else
+  for(;;)
+  {
+    osDelay(200U);
+
+    if(osSemaphoreRelease(SyncSemHandle) == osOK)
     {
-        LOG_INFO("RBTEST", "Producer sync FAIL");
-        for (;;) { osDelay(1000U); }
+      LOG_INFO("SYS",
+                "Producer Released");
     }
+  }
 
-    RingBuffer_Init(&ring_buffer);
-
-    if (ring_buffer.overflow_count != 0U)
-    {
-        failures++;
-    }
-
-    /* 通知 Consumer 执行 Empty 测试 */
-    if (!RB_TestNotify(SemConsumerTaskHandle) ||
-        !RB_TestWait())
-    {
-        LOG_INFO("RBTEST", "Empty sync FAIL");
-        for (;;) { osDelay(1000U); }
-    }
-
-    /* ========== FULL 测试 ========== */
-
-    /* 容量为 7，写入 0～6 */
-    for (uint32_t i = 0U; i < 7U; i++)
-    {
-        status = RingBuffer_WriteByte(
-            &ring_buffer, i
-        );
-
-        if (status != RING_BUFF_OK)
-        {
-            failures++;
-        }
-    }
-
-    uint32_t old_head = ring_buffer.head;
-    uint32_t old_tail = ring_buffer.tail;
-    uint32_t old_overflow =
-        ring_buffer.overflow_count;
-
-    /* 第 8 次写入：应返回 FULL */
-    status = RingBuffer_WriteByte(
-        &ring_buffer, 7U
-    );
-
-    if (status != RING_BUFF_ERROR_FULL)
-    {
-        failures++;
-    }
-
-    if (ring_buffer.head != old_head ||
-        ring_buffer.tail != old_tail ||
-        ring_buffer.overflow_count != old_overflow + 1U ||
-        !RingBuffer_IsFull(&ring_buffer))
-    {
-        failures++;
-    }
-
-    LOG_INFO("RBTEST",
-             "FULL %s, overflow=%lu",
-             failures == 0U ? "PASS" : "FAIL",
-             (unsigned long)ring_buffer.overflow_count);
-
-    /* 通知 Consumer 读取 0、1 */
-    if (!RB_TestNotify(SemConsumerTaskHandle) ||
-        !RB_TestWait())
-    {
-        LOG_INFO("RBTEST", "Full sync FAIL");
-        for (;;) { osDelay(1000U); }
-    }
-
-    /* ========== WRAP-AROUND 写入 ========== */
-
-    /* 现在 head=7, tail=2 */
-
-    bool wrap_write_ok = true;
-
-    status = RingBuffer_WriteByte(
-        &ring_buffer, 7U
-    );
-    if (status != RING_BUFF_OK)
-    {
-        wrap_write_ok = false;
-    }
-
-    status = RingBuffer_WriteByte(
-        &ring_buffer, 8U
-    );
-    if (status != RING_BUFF_OK)
-    {
-        wrap_write_ok = false;
-    }
-
-    /* head: 7 -> 0 -> 1 */
-    if (ring_buffer.head != 1U ||
-        ring_buffer.tail != 2U ||
-        !RingBuffer_IsFull(&ring_buffer) ||
-        ring_buffer.overflow_count != 1U)
-    {
-        wrap_write_ok = false;
-    }
-
-    LOG_INFO("RBTEST",
-             "WRAP WRITE %s, head=%lu tail=%lu",
-             wrap_write_ok ? "PASS" : "FAIL",
-             (unsigned long)ring_buffer.head,
-             (unsigned long)ring_buffer.tail);
-
-    /* 通知 Consumer 验证 2～8 */
-    if (!RB_TestNotify(SemConsumerTaskHandle) ||
-        !RB_TestWait())
-    {
-        LOG_INFO("RBTEST", "Wrap sync FAIL");
-        for (;;) { osDelay(1000U); }
-    }
-
-    LOG_INFO("RBTEST", "Producer test finished");
-
-    for (;;)
-    {
-        osDelay(1000U);
-    }
-
+#endif
     /* USER CODE END StartSemProducerTask */
 }
 
@@ -455,153 +471,167 @@ void StartSemProducerTask(void *argument)
 
 void StartSemConsumerTask(void *argument)
 {
-    /* USER CODE BEGIN StartSemConsumerTask */
+  /* USER CODE BEGIN StartSemConsumerTask */
+# if (RINGBUFFER_OR_SEMAPHORBINARY == 0U)
+  (void)argument;
 
-    (void)argument;
+  uint32_t value_acquired = 0U;
+  RingBufferStatus_t status;
 
-    uint32_t value_acquired = 0U;
-    RingBufferStatus_t status;
+  bool empty_ok = true;
+  bool full_read_ok = true;
+  bool wrap_ok = true;
 
-    bool empty_ok = true;
-    bool full_read_ok = true;
-    bool wrap_ok = true;
+  /* 通知 Producer：Consumer 已就绪 */
+  if (!RB_TestNotify(SemProducerTaskHandle) ||
+      !RB_TestWait())
+  {
+      LOG_INFO("RBTEST", "Consumer sync FAIL");
+      for (;;) { osDelay(1000U); }
+  }
 
-    /* 通知 Producer：Consumer 已就绪 */
-    if (!RB_TestNotify(SemProducerTaskHandle) ||
-        !RB_TestWait())
+  /* ========== EMPTY 测试 ========== */
+
+  value_acquired = 0xA5U;
+
+  status = RingBuffer_ReadByte(
+      &ring_buffer, &value_acquired
+  );
+
+  if (status != RING_BUFF_ERROR_EMPTY ||
+      value_acquired != 0xA5U ||
+      !RingBuffer_IsEmpty(&ring_buffer) ||
+      ring_buffer.head != 0U ||
+      ring_buffer.tail != 0U)
+  {
+      empty_ok = false;
+  }
+
+  LOG_INFO("RBTEST",
+            "EMPTY %s",
+            empty_ok ? "PASS" : "FAIL");
+
+  /* 通知 Producer 开始 Full 测试 */
+  if (!RB_TestNotify(SemProducerTaskHandle) ||
+      !RB_TestWait())
+  {
+      LOG_INFO("RBTEST", "Full sync FAIL");
+      for (;;) { osDelay(1000U); }
+  }
+
+  /* ========== FULL 状态检查 ========== */
+
+  if (!RingBuffer_IsFull(&ring_buffer) ||
+      ring_buffer.head != 7U ||
+      ring_buffer.tail != 0U)
+  {
+      full_read_ok = false;
+  }
+
+  /* 读取 0、1，为回绕写入腾出空间 */
+  for (uint32_t i = 0U; i < 2U; i++)
+  {
+      status = RingBuffer_ReadByte(
+          &ring_buffer, &value_acquired
+      );
+
+      if (status != RING_BUFF_OK ||
+          value_acquired != i)
+      {
+          full_read_ok = false;
+      }
+  }
+
+  if (ring_buffer.head != 7U ||
+      ring_buffer.tail != 2U)
+  {
+      full_read_ok = false;
+  }
+
+  LOG_INFO("RBTEST",
+            "FULL READ %s",
+            full_read_ok ? "PASS" : "FAIL");
+
+  /* 通知 Producer 写入 7、8 */
+  if (!RB_TestNotify(SemProducerTaskHandle) ||
+      !RB_TestWait())
+  {
+      LOG_INFO("RBTEST", "Wrap sync FAIL");
+      for (;;) { osDelay(1000U); }
+  }
+
+  /* ========== WRAP-AROUND 读取 ========== */
+
+  /* 期望读取：2、3、4、5、6、7、8 */
+  for (uint32_t i = 2U; i <= 8U; i++)
+  {
+      value_acquired = 0xA5U;
+
+      status = RingBuffer_ReadByte(
+          &ring_buffer, &value_acquired
+      );
+
+      if (status != RING_BUFF_OK ||
+          value_acquired != i)
+      {
+          wrap_ok = false;
+      }
+  }
+
+  /* 读取完毕后应恢复 Empty */
+  if (!RingBuffer_IsEmpty(&ring_buffer) ||
+      ring_buffer.head != 1U ||
+      ring_buffer.tail != 1U)
+  {
+      wrap_ok = false;
+  }
+
+  /* 再次空读，确认不会返回旧数据 */
+  value_acquired = 0xA5U;
+
+  status = RingBuffer_ReadByte(
+      &ring_buffer, &value_acquired
+  );
+
+  if (status != RING_BUFF_ERROR_EMPTY ||
+      value_acquired != 0xA5U)
+  {
+      wrap_ok = false;
+  }
+
+  LOG_INFO("RBTEST",
+            "WRAP READ %s, head=%lu tail=%lu",
+            wrap_ok ? "PASS" : "FAIL",
+            (unsigned long)ring_buffer.head,
+            (unsigned long)ring_buffer.tail);
+
+  /* 通知 Producer 测试结束 */
+  if (!RB_TestNotify(SemProducerTaskHandle))
+  {
+      LOG_INFO("RBTEST", "Finish sync FAIL");
+  }
+
+  LOG_INFO("RBTEST", "Consumer test finished");
+
+  for (;;)
+  {
+      osDelay(1000U);
+  }
+#else
+  (void)argument;
+  for(;;)
+  {
+    LOG_INFO("SEM",
+              "Consumer Waiting");
+
+    if(osSemaphoreAcquire(SyncSemHandle, osWaitForever) == osOK)
     {
-        LOG_INFO("RBTEST", "Consumer sync FAIL");
-        for (;;) { osDelay(1000U); }
+      LOG_INFO("SEM",
+                "Consumer Acquired");
     }
+  }
 
-    /* ========== EMPTY 测试 ========== */
-
-    value_acquired = 0xA5U;
-
-    status = RingBuffer_ReadByte(
-        &ring_buffer, &value_acquired
-    );
-
-    if (status != RING_BUFF_ERROR_EMPTY ||
-        value_acquired != 0xA5U ||
-        !RingBuffer_IsEmpty(&ring_buffer) ||
-        ring_buffer.head != 0U ||
-        ring_buffer.tail != 0U)
-    {
-        empty_ok = false;
-    }
-
-    LOG_INFO("RBTEST",
-             "EMPTY %s",
-             empty_ok ? "PASS" : "FAIL");
-
-    /* 通知 Producer 开始 Full 测试 */
-    if (!RB_TestNotify(SemProducerTaskHandle) ||
-        !RB_TestWait())
-    {
-        LOG_INFO("RBTEST", "Full sync FAIL");
-        for (;;) { osDelay(1000U); }
-    }
-
-    /* ========== FULL 状态检查 ========== */
-
-    if (!RingBuffer_IsFull(&ring_buffer) ||
-        ring_buffer.head != 7U ||
-        ring_buffer.tail != 0U)
-    {
-        full_read_ok = false;
-    }
-
-    /* 读取 0、1，为回绕写入腾出空间 */
-    for (uint32_t i = 0U; i < 2U; i++)
-    {
-        status = RingBuffer_ReadByte(
-            &ring_buffer, &value_acquired
-        );
-
-        if (status != RING_BUFF_OK ||
-            value_acquired != i)
-        {
-            full_read_ok = false;
-        }
-    }
-
-    if (ring_buffer.head != 7U ||
-        ring_buffer.tail != 2U)
-    {
-        full_read_ok = false;
-    }
-
-    LOG_INFO("RBTEST",
-             "FULL READ %s",
-             full_read_ok ? "PASS" : "FAIL");
-
-    /* 通知 Producer 写入 7、8 */
-    if (!RB_TestNotify(SemProducerTaskHandle) ||
-        !RB_TestWait())
-    {
-        LOG_INFO("RBTEST", "Wrap sync FAIL");
-        for (;;) { osDelay(1000U); }
-    }
-
-    /* ========== WRAP-AROUND 读取 ========== */
-
-    /* 期望读取：2、3、4、5、6、7、8 */
-    for (uint32_t i = 2U; i <= 8U; i++)
-    {
-        value_acquired = 0xA5U;
-
-        status = RingBuffer_ReadByte(
-            &ring_buffer, &value_acquired
-        );
-
-        if (status != RING_BUFF_OK ||
-            value_acquired != i)
-        {
-            wrap_ok = false;
-        }
-    }
-
-    /* 读取完毕后应恢复 Empty */
-    if (!RingBuffer_IsEmpty(&ring_buffer) ||
-        ring_buffer.head != 1U ||
-        ring_buffer.tail != 1U)
-    {
-        wrap_ok = false;
-    }
-
-    /* 再次空读，确认不会返回旧数据 */
-    value_acquired = 0xA5U;
-
-    status = RingBuffer_ReadByte(
-        &ring_buffer, &value_acquired
-    );
-
-    if (status != RING_BUFF_ERROR_EMPTY ||
-        value_acquired != 0xA5U)
-    {
-        wrap_ok = false;
-    }
-
-    LOG_INFO("RBTEST",
-             "WRAP READ %s, head=%lu tail=%lu",
-             wrap_ok ? "PASS" : "FAIL",
-             (unsigned long)ring_buffer.head,
-             (unsigned long)ring_buffer.tail);
-
-    /* 通知 Producer 测试结束 */
-    if (!RB_TestNotify(SemProducerTaskHandle))
-    {
-        LOG_INFO("RBTEST", "Finish sync FAIL");
-    }
-
-    LOG_INFO("RBTEST", "Consumer test finished");
-
-    for (;;)
-    {
-        osDelay(1000U);
-    }
-
+#endif
     /* USER CODE END StartSemConsumerTask */
 }
 
