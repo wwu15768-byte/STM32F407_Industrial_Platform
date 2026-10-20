@@ -19,7 +19,6 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "FreeRTOS.h"
-#include "cmsis_os2.h"
 #include "task.h"
 #include "main.h"
 #include "cmsis_os.h"
@@ -30,6 +29,7 @@
 #include "debug_log.h"
 #include "m4_ipc.h"
 #include "ring_buffer.h"
+#include "m4_isr.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -211,7 +211,14 @@ void MX_FREERTOS_Init(void) {
   {
       Error_Handler();
   }
-  /* USER CODE END RTOS_THREADS */
+
+  M4IsrStatus_t isr_status = M4ISR_Init();
+
+  if (isr_status != M4_ISR_OK)
+  {
+      Error_Handler();
+  }
+    /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
   /* add events, ... */
@@ -267,6 +274,7 @@ void StartUARTTask(void *argument)
       uint32_t semconsumer_stack_free;
       uint32_t mutex_a_stack_free;
       uint32_t mutex_b_stack_free;
+      uint32_t isr_worker_stack_free;
       size_t heap_free;
       size_t heap_min_free;
       heartbeat_stack_free = osThreadGetStackSpace(HeartBeatTaskHandle);
@@ -275,6 +283,7 @@ void StartUARTTask(void *argument)
       semconsumer_stack_free = osThreadGetStackSpace(SemConsumerTaskHandle);
       mutex_a_stack_free = osThreadGetStackSpace(MutexTaskAHandle);
       mutex_b_stack_free = osThreadGetStackSpace(MutexTaskBHandle);
+      isr_worker_stack_free = M4ISR_GetWorkerStackFree();
       heap_free = xPortGetFreeHeapSize();
       heap_min_free = xPortGetMinimumEverFreeHeapSize();
 
@@ -292,12 +301,16 @@ void StartUARTTask(void *argument)
          (unsigned long)heap_free,
          (unsigned long)heap_min_free);
 
-         LOG_INFO("SYS",
+      LOG_INFO("SYS",
          "SemProFree=%lu B SemConFree=%lu B MutexAFree=%lu B MutexBFree=%lu B",
          (unsigned long)semproducer_stack_free,
          (unsigned long)semconsumer_stack_free,
          (unsigned long)mutex_a_stack_free,
          (unsigned long)mutex_b_stack_free);
+
+      LOG_INFO("SYS",
+         "ISRWorkerFree=%lu B",
+         (unsigned long)isr_worker_stack_free);
     }
     osDelay(1000U);
   }
@@ -311,7 +324,6 @@ void StartUARTTask(void *argument)
 * @retval None
 */
 /* USER CODE END Header_StartSemProducerTask */
-
 void StartSemProducerTask(void *argument)
 {
   /* USER CODE BEGIN StartSemProducerTask */
@@ -458,7 +470,7 @@ void StartSemProducerTask(void *argument)
   }
 
 #endif
-    /* USER CODE END StartSemProducerTask */
+  /* USER CODE END StartSemProducerTask */
 }
 
 /* USER CODE BEGIN Header_StartSemConsumerTask */
@@ -468,7 +480,6 @@ void StartSemProducerTask(void *argument)
 * @retval None
 */
 /* USER CODE END Header_StartSemConsumerTask */
-
 void StartSemConsumerTask(void *argument)
 {
   /* USER CODE BEGIN StartSemConsumerTask */
@@ -632,7 +643,7 @@ void StartSemConsumerTask(void *argument)
   }
 
 #endif
-    /* USER CODE END StartSemConsumerTask */
+  /* USER CODE END StartSemConsumerTask */
 }
 
 /* USER CODE BEGIN Header_StartMutexTaskA */
