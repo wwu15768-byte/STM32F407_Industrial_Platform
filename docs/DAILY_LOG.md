@@ -1619,3 +1619,180 @@ MinHeap=4568 B
 7. 重新测量 Stack 和 FreeRTOS Heap。
 
 完成 ISR → Task 后再开展 M4 最终模块整理、联合稳定性和复位恢复验证。
+
+
+# 2026-10-18
+
+## 今日计划
+
+- 恢复在 M4.4 确定性 Ring Buffer 测试中被临时复用的 Semaphore Task。
+- 复核原 Queue、Thread Flags、Mutex、UART 运行。
+- 选择 M4.5 TIM7 中断源并完成 CubeMX 配置。
+- 处理 CubeMX 重新生成代码导致的 Git CRLF/LF 噪音。
+- 为 ISR → Task 通信建立独立应用模块接口。
+
+## 实际完成
+
+- 通过编译开关保留 Ring Buffer 基础测试代码，恢复 `SyncSem` 的 Producer Release / Consumer Acquire 路径。
+- 修正 Producer / Consumer 的职责和任务返回问题，保持任务循环运行。
+- 完成 Semaphore 板级回归以及原 M4 Queue、Thread Flags、Mutex 和 UART 的运行观察。
+- 形成并推送 `c4c0721`：`fix: restore M4 semaphore task baseline`。
+- 在 CubeMX 中启用 TIM7，使用 84 MHz timer clock、PSC=8399、ARR=999，目标中断周期 100 ms。
+- `main.c` 加入 `MX_TIM7_Init()`；HAL TIM7 MSP 初始化中配置时钟与 NVIC Priority=5；`TIM7_IRQHandler()` 通过 `HAL_TIM_IRQHandler(&htim7)` 进入 HAL。
+- 核对 `HAL_TIM_PeriodElapsedCallback()` 中 TIM6 的 `HAL_IncTick()` 条件分支，TIM7 不重复增加 HAL Tick。
+- 检查发现 `.ioc` 已保存 `TIM7.Period=999`，而 `tim.c` 曾仍为 `Period=9`；重新生成后最终确认为 999。
+- CubeMX 多次生成后出现大量 CRLF/LF 工作区噪音，通过 Git EOL 属性检查、备份、字节级定向 LF 规范化和实际 Diff 审核解决。
+
+## 验收情况
+
+- Semaphore Release / Acquire 连续唤醒：PASS。
+- Queue、Mutex、Task Flags、UART 短时回归：PASS。
+- Semaphore 恢复阶段运行时 Free Heap / MinHeap：4568 B / 4568 B。
+- Semaphore Producer/Consumer 剩余 Stack：288 B / 288 B。
+- TIM7 生成参数最终对照：PSC=8399、ARR=999，PASS。
+- TIM6 与 TIM7 回调职责源码审查：PASS。
+- 本阶段仅完成 TIM7 底层配置/代码接入，不将其写成 ISR → Task 板级验收完成。
+
+## 未完成
+
+- ISR → Task Worker、实际板级通知和高负载事件合并实验（随后阶段推进）。
+- M4 Final Integration、最终复位/断电重启。
+
+## 今日 Bug
+
+- CubeMX 生成 CRLF 造成几十个已跟踪文件显示修改；通过定向恢复 LF 解决。
+- TIM7 `.ioc` / `tim.c` ARR 曾不一致：9 对应 1 ms，999 对应 100 ms；重新生成后修正。
+
+## 今日学习
+
+- 进一步理解 C/CMSIS Task 返回与生命周期管理。
+- 理解 TIM6 HAL Tick 与 TIM7 用户中断应按 Instance 分开。
+- 理解 NVIC Priority 5 与 FreeRTOS ISR-safe API 阈值的关系。
+- 理解 Git `i/lf w/crlf attr/text eol=lf` 的实际含义，以及 Git Diff 与功能差异的区别。
+
+## 尚未理解
+
+- TIM7 高负载下 ISR/Task 时序与通知合并的定量边界。
+- Ring Buffer SPSC 数据所有权、内存可见性。
+
+## Git
+
+- Branch：`feature/m4-rtos-communication-baseline`。
+- Semaphore 恢复 checkpoint：`c4c0721`，用户确认本地与 origin 同步、工作树 clean。
+- TIM7 与 ISR Worker 后续改动在独立功能提交中形成 checkpoint，不在恢复提交中混入。
+
+## 明天下一步
+
+实现独立 `m4_isr`，检查枚举状态返回、Worker Task 启动 TIM7、Thread Flags 阻塞唤醒，完成 Clean Build 和首次板级验证。
+
+# 2026-10-20
+
+## 今日计划
+
+- 以 TIM7 100 ms 更新中断建立 `ISR → Thread Flags → Worker Task` 通信基线。
+- 清晰区分 ISR 非阻塞通知与 Task Context 的日志/处理。
+- 测量 ISR Worker 运行时 Stack、FreeRTOS Heap，验证原 M4 模块共存。
+- 完成功能提交并同步远程。
+
+## 实际完成
+
+- 建立 `Inc/m4_isr.h`、`Src/m4_isr.c` 独立模块，通过根目录 CMake 加入构建。
+- 模块初始化使用枚举返回码；Worker Stack 查询函数使用数值返回 `uint32_t M4ISR_GetWorkerStackFree(void)`。
+- Worker 使用 `osThreadFlagsWait(..., osWaitForever)`，由任务启动 `HAL_TIM_Base_Start_IT(&htim7)`。
+- 仅在 `main.c` 已有 HAL PeriodElapsed Callback 的 TIM7 分支转发通知，保留 TIM6 HAL 时基逻辑。
+- `FreeRTOSConfig.h` 核对 `configPRIO_BITS=4`、`configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY=5`；TIM7 Priority=5，NVIC Grouping 4-bit。
+- 实测 `irq=30/40/50/60` 与 `received` 对应，`errors=0`。
+- Queue 序号连续至当前截取日志中的 31，Semaphore 持续唤醒，原 Task Flags 与 Mutex 计数正常，UART 周期输出。
+- 用户随后确认持续运行测试均通过；完整结束时的实际计数和准确时长未在本次文档输入中提供。
+- 最新已确认 Git HEAD：`adf5d5e`：`feat: establish M4 ISR to task notification baseline`，本地与 origin 同步。
+
+## 验收情况
+
+- Debug Clean Build：PASS（FLASH 34748 B，RAM 21192 B）。
+- ISR → Task 基础通知：PASS。
+- `errors=0`，低负载采样点 `irq=received`：PASS。
+- M4 原 Queue、Semaphore、Thread Flags、Mutex、UART 回归观察：PASS。
+- Worker Stack 最小剩余：520 B。
+- FreeRTOS Current / Minimum Ever Free Heap：3432 B / 3432 B。
+- M4.5 持续运行：用户确认通过；不补写缺失的最终统计数据。
+- M4 Final Integration：未验收。
+
+## 未完成
+
+- Ring Buffer 真实 SPSC 并发访问和内存所有权验证。
+- M4 最终模块归并、最终整体长时间稳定性、NRST ×3 与断电重启 ×3。
+- M4.5 独立 docs checkpoint（功能提交已经完成）。
+
+## 今日 Bug
+
+- 本次提供的 M4.5 板级日志未出现新 HardFault、Hang 或通知错误。
+- 历史 CubeMX EOL 问题已按规范处理，未在功能提交中保留无关大范围格式化差异。
+
+## 今日学习
+
+- 理解 ISR-safe `osThreadFlagsSet()` 与 Task-only `osThreadFlagsWait()` 的上下文差异。
+- 理解同一 Flag bit 的 Pending State 与事件总次数不是同一语义。
+- 理解新增 1024 B Task Stack 会消耗 FreeRTOS 动态 Heap，而 ELF 静态 RAM 不等于运行时 Heap。
+- 理解初始化阶段成功与 Worker 内稍后启动 TIM7 成功不是同一个返回状态。
+
+## 尚未理解
+
+- 高负载下的事件合并、通知延迟和吞吐量界限。
+- 用 SPSC Ring Buffer 安全地承载真实 ISR 数据。
+- M5 DMA Half / Full Buffer Ownership 模型。
+
+## Git
+
+- 功能 checkpoint：`adf5d5e`，`feat: establish M4 ISR to task notification baseline`。
+- Parent：`c4c0721`；分支与远程状态由用户确认一致，工作树 clean。
+- 文档更新与 M4 Final Integration 后续单独提交。
+
+## 明天下一步
+
+以 M4.5 完整测试记录为基础同步项目文档；之后进入 M4 Final Integration，明确当前正式功能和未验证边界。
+
+# 2026-10-23
+
+## 今日计划
+
+- 按照已有 `docs.zip` 的九份文档原格式同步目前已验证的 M4.5 状态。
+- 统一 Git HEAD、测试结论、里程碑位置与交接任务。
+- 保留旧历史，注明 Ring Buffer 字节容量的资料差异。
+
+## 实际完成
+
+- 本次交付为新的文档 ZIP；将现有九份 Markdown 内容基于对话已确认事实同步到 2026-10-23。
+- 未修改用户本地工程源码；未代替用户执行本地 Git 提交或推送。
+
+## 验收情况
+
+- M4.5 功能提交 `adf5d5e` 由用户确认已在 origin 分支，工作区 clean（文档更新前）。
+- 本次文档包的文件完整性、章节结构和相互引用在生成时检查；导入本地后仍需人工复核 Diff。
+
+## 未完成
+
+- 将文档 ZIP 内容合并回本地仓库。
+- 文档独立 Git 提交与推送。
+- M4 Final Integration 与最终 M4 关闭。
+
+## 今日 Bug
+
+- 暂无新增固件 Bug 报告；文档中识别到 Ring Buffer 旧叙述与此前源码快照的数据类型差异，待对照最新仓库核实。
+
+## 今日学习
+
+- 区分经实测证明的功能、用户确认通过的测试和未提供原始结尾数据的边界。
+- 单一职责文档需要同步当前状态，但不应覆盖旧日期的原始测试事实。
+
+## 尚未理解
+
+- Ring Buffer 最新 HEAD 中实际元素类型与 API 命名是否已调整；当前仅有先前源码快照。
+
+## Git
+
+- 已确认功能 HEAD：`adf5d5e`（此 ZIP 准备前）。
+- 新的 docs checkpoint：尚未产生。
+
+## 明天下一步
+
+审核导入后的 Markdown Diff，独立提交和推送文档；再开展 M4 最终联合稳定性与 NRST / Power-cycle 验收。

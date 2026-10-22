@@ -159,3 +159,31 @@
     - 如果需要无损工业采样，应另行进行生产 / 消费吞吐量、缓存容量和数据丢失预算设计。
     - M5 ADC + Timer + DMA 不直接假设当前单字节 Ring Buffer 能够满足 DMA 数据块所有权要求。
     - 如果后续改变 Full 策略或并发模型，应新增设计决策并说明替代关系。
+
+
+## DEC-20261018-01：M4.5 采用 TIM7 作为独立 ISR → Task 事件源
+
+- 状态：已接受，基础功能已板级验证。
+- 决策：保留 TIM6 作为 HAL 1 ms Timebase、SysTick 作为 FreeRTOS Kernel Tick；为 M4.5 单独使用 TIM7（PSC=8399、ARR=999、定时器时钟 84 MHz），每 100 ms 产生更新事件。
+- 决策：TIM7 NVIC Priority 使用 5，在 4 位抢占优先级分组、`configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY=5` 前提下，通过 CMSIS-RTOS2 ISR-safe `osThreadFlagsSet()` 通知 Worker。
+- 决策：使用 `Inc/m4_isr.h` / `Src/m4_isr.c` 独立封装 ISR 通知与 Worker；Worker 以 `osThreadFlagsWait(..., osWaitForever)` 阻塞；在 Worker 运行后启动 TIM7。
+- 决策：只在 `main.c` 现有 `HAL_TIM_PeriodElapsedCallback()` 的 USER CODE 区域处理 TIM7 分支，不重定义同名 HAL 回调；`HAL_IncTick()` 仅在 TIM6 分支执行。
+- 原因：真实硬件中断可控、频率低、易观测，便于单独验证上下文和优先级规则，避免挪用 HAL 时基。
+- 验证：`irq=30/40/50/60` 对应 `received=30/40/50/60`、`errors=0`；用户确认持续运行测试通过，功能 checkpoint 为 `adf5d5e`。
+- 影响：这只验证事件通知基线，不证明同一 Flag bit 无损累计，也不证明 Ring Buffer ISR/Task 数据并发安全。
+
+## DEC-20261020-01：新增用户模块采用专属枚举状态码
+
+- 状态：已接受。
+- 决策：自定义且需要报告操作结果的初始化/启动/停止 API 优先返回模块专属 `Status_t` 枚举，例如 `M4IsrStatus_t`；不再以 `bool` 仅表示成功/失败。
+- 决策：确实无需返回结果的回调继续使用 `void`；查询值接口如 `uint32_t M4ISR_GetWorkerStackFree(void)` 保持返回实际数据，无需因规范改成枚举；HAL / CMSIS-RTOS2 原生 API 保持原签名。
+- 原因：明确区分重复初始化、线程创建失败、定时器启动失败等故障，提高错误定位与模块一致性。
+- 影响：新模块沿用该规范；已验收的历史模块不做无关的批量重构。`M4ISR_Init()` 创建 Worker 成功不代表异步的 TIM7 启动一定成功。
+
+## DEC-20261023-01：CubeMX 重新生成代码后定向恢复 LF 并保留功能差异
+
+- 状态：已接受，实践验证有效。
+- 决策：保持仓库现有 `text eol=lf` 规则和 `core.autocrlf=false`；CubeMX 生成 CRLF 后先备份，再只对需要 LF 的文件做字节级 CRLF → LF，审核普通 Diff / 忽略行尾 Diff 与 `git diff --check`。
+- 原因：本次 Generate Code 曾使大量 FreeRTOS 中间件文件显示为修改，但归一化后真实变化只集中在 TIM7 配置与接入文件。
+- 影响：不得使用 `git reset --hard`、不审查就 `git add .`、或全库 `git add --renormalize .` 来清理本次工作区；重新生成后先确认 `.ioc` 的 TIM7.Period 与 `Src/tim.c` 的 ARR 一致。
+- 资料一致性待办：既有 Ring Buffer 文档写成 `uint8_t` / 有效 7 B，而 2026-10-17 早期源码快照 `ring_buffer.h` 出现 `uint32_t buffer[8]` / 有效 7 个元素。此处作为待复核事实差异记录，**不要在未检查最新头文件前静默改动已验收的历史报告**。

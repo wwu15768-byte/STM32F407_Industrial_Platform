@@ -234,3 +234,143 @@ Consumer 将累计溢出历史误当作当前缓冲区数据状态，并且没�
 - 返回状态和输出数据必须一起验证。
 - 累计统计量不能直接代表当前 Buffer 状态。
 - 确定性测试比依赖任务运行时序更容易定位边界错误。
+
+
+## ERR-20261018-01：CubeMX 生成 CRLF 导致 Git 大量无关文件显示修改
+
+### 日期
+
+2026-10-18（M4.5 TIM7 代码生成和排查期间）。
+
+### 模块
+
+CubeMX / Git / EOL 规范 / FreeRTOS 中间件文件。
+
+### 当前环境
+
+Windows PowerShell、CubeMX、Git；仓库内源码使用 `text eol=lf`，`core.autocrlf=false`。
+
+### 问题现象
+
+CubeMX Generate Code 后，`git status --short` 出现大量中间件、HAL 与工程文件被修改，`git diff` 提示 `CRLF will be replaced by LF`。
+
+### 期望行为
+
+只显示 TIM7 相关的 `.ioc`、CMake、生成外设源码和少量 RTOS 集成变更，不产生几十个 EOL-only 噪音文件。
+
+### 实际行为
+
+`git ls-files --eol` 证实典型文件为 `i/lf w/crlf attr/text eol=lf`；最终恢复后 Diff 收敛至 TIM7 必需修改，`git diff --check` 无输出。
+
+### 复现步骤
+
+在仓库要求 LF 的工程中由 CubeMX 重新生成代码，执行 `git status --short`、`git diff --stat` 并检查 `git ls-files --eol`。
+
+### 已知事实
+
+- `Src/freertos.c`、`Src/main.c`、`.ioc`、`stm32f4xx_it.c` 曾显示 `i/lf w/crlf attr/text eol=lf`。
+- `core.autocrlf=false`。
+- 正常化后保留了 TIM7 新文件 `Inc/tim.h`、`Src/tim.c`、`stm32f4xx_ll_tim.h`，未丢失功能修改。
+
+### 初始假设
+
+CubeMX 将工作区原 LF 文件重新写为 CRLF，造成 Git 检测噪音。
+
+### 验证过程
+
+对照 `git diff --ignore-space-at-eol --stat`、`git ls-files --eol` 和普通 Diff；为修改文件备份后按字节将 CRLF 改为 LF，重新执行 `git status`、`git diff --stat`、`git diff --check`。
+
+### 根本原因
+
+CubeMX 生成文件换行格式与仓库 LF 约束不一致；Git 工作区状态包含行尾变化噪音。
+
+### 解决方案
+
+仅处理确需 LF 的文件，保留实际 TIM7 生成差异，不强制全库重整；对 `LICENSE` 等内容不变的文件按确认后的原版本恢复。
+
+### 验证结果
+
+- 大量 FreeRTOS 中间件文件从修改列表消失。
+- `git diff --stat` 与 `git diff --ignore-space-at-eol --stat` 一致。
+- `git diff --check` 无输出。
+- 后续干净构建通过，M4.5 板级实验通过。
+
+### 为什么会犯这个错误
+
+未预期 CubeMX 的 Windows 文本输出可能与仓库 LF 规范冲突，最初将批量显示的文件误当成大量业务修改风险。
+
+### 如何避免再次发生
+
+每次 Generate Code：先备份 → 检查 `git ls-files --eol` → 定向规范化 → 审核实际 Diff → Clean Build，避免未经审查的全量暂存或强制回退。
+
+### 我学到了什么
+
+`git status` 的“被修改”与实质性语义改变不是一回事；版本控制的行尾规则应与代码生成工具一起考虑。
+
+## ERR-20261018-02：TIM7 .ioc 的 Period 已设为 999，但 tim.c 暂时仍为 9
+
+### 日期
+
+2026-10-18。
+
+### 模块
+
+STM32CubeMX / TIM7 / 代码生成同步。
+
+### 当前环境
+
+TIM7 定时器时钟 84 MHz，PSC=8399；目标更新周期 100 ms。
+
+### 问题现象
+
+`STM32F407_Industrial_Platform.ioc` 保存 `TIM7.Period=999`，但当时 `Src/tim.c` 仍生成 `htim7.Init.Period = 9`。
+
+### 期望行为
+
+`Src/tim.c` 中 ARR 为 999，周期 100 ms / 10 Hz。
+
+### 实际行为
+
+ARR=9 时周期仅为 1 ms / 1000 Hz；与实验设计不符。
+
+### 复现步骤
+
+对照 `.ioc` 的 `TIM7.Period` 与 `Src/tim.c` 中 `htim7.Init.Period`，检查两文件修改时间。
+
+### 已知事实
+
+- `.ioc`：`TIM7.Period=999`、`TIM7.Prescaler=8399`。
+- 曾查看到 `tim.c` 中 Period=9。
+- `.ioc` 修改时间 22:44:13，比 `tim.c` 当时的 22:42:52 晚。
+
+### 初始假设
+
+配置保存与代码生成先后不同步，或生成文件尚未更新；时间先后是线索，不单独证明生成器内部原因。
+
+### 验证过程
+
+重新 Generate Code 后用 PowerShell 检查 `Src/tim.c`，最终确认 `htim7.Init.Prescaler = 8399`、`htim7.Init.Period = 999`。
+
+### 根本原因
+
+**未从 CubeMX 内部日志独立证实。** 已观察到配置与生成文件曾不同步，重新生成消除了不一致。
+
+### 解决方案
+
+以 `.ioc` 为配置源，保存配置后重新 Generate Code；立即对照源文件值，再处理行尾差异并构建。
+
+### 验证结果
+
+最终 `Src/tim.c` 的 Period=999；已通过 M4.5 板级 IRQ → Task 通信实验。
+
+### 为什么会犯这个错误
+
+当时未在生成后第一时间核对关键定时器 ARR 与目标周期。
+
+### 如何避免再次发生
+
+每次修改定时器：计算时钟 → 检查 `.ioc` → 重新生成 → 检查 `tim.c` → clean build → 实机观测。
+
+### 我学到了什么
+
+`.ioc` 正确并不自动证明工作区的自动生成 C 文件已与其同步；周期应同时通过算式和实测链路核验。

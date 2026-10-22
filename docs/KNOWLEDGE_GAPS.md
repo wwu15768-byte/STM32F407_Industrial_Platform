@@ -690,8 +690,8 @@ Final tail     = 1
 - volatile 的作用和局限。
 - 编译器优化与内存访问顺序。
 - 必要的内存屏障和同步策略。
-- ISR → Task 的最小数据交接过程。
-- CMSIS-RTOS2 ISR-safe API 的实际限制。
+- ISR → Task **数据**交接过程（M4.5 已验证事件通知，尚未验证 Ring Buffer 数据共享）。
+- CMSIS-RTOS2 更复杂 ISR-safe API 与高负载下事件合并、唤醒延迟的边界（当前已验证 Thread Flags 基线）。
 - 多生产者 / 多消费者 Ring Buffer 的复杂性。
 - 覆盖旧数据时对 tail 所有权的影响。
 - 数据丢失告警和恢复状态机。
@@ -725,20 +725,19 @@ Ring Buffer 基础数据结构已经完成。
 
 下一优先级：
 
-1. CMSIS-RTOS2 ISR-safe API。
-2. ISR → Task 最小通信实验。
-3. SPSC Ring Buffer 数据所有权。
-4. 原子性、volatile 与内存可见性。
-5. ISR / Task 并发数据一致性。
-6. ADC DMA Buffer Ownership。
-7. 数据丢失统计与告警策略。
+1. 已完成：TIM7 + CMSIS-RTOS2 ISR Thread Flags 通知基线。
+2. 待深化：SPSC Ring Buffer 数据所有权。
+3. 待深化：原子性、volatile 与内存可见性。
+4. 待验证：ISR / Task 并发数据一致性。
+5. 后续：ADC DMA Buffer Ownership。
+6. 后续：数据丢失统计与告警策略。
 
 ### 学习任务
 
 - 复习当前 RingBuffer_t 的 head / tail 所有权。
 - 研究 ISR 与 Task 访问共享状态的约束。
 - 阅读 CMSIS-RTOS2 中断上下文 API 规则。
-- 建立最小中断通知任务实验。
+- 已建立 TIM7 中断通知任务实验；后续补充高负载、并发数据访问验证。
 - 验证 Task 阻塞等待与唤醒。
 - 避免在 ISR 中使用当前同步 Logger。
 - 建立可重复的数据顺序和完整性验证。
@@ -762,11 +761,11 @@ Ring Buffer 基础数据结构已经完成。
 - 双 Task Thread Flags 阶段同步测试。
 - 五个测试阶段全部 PASS。
 - Ring Buffer 测试期间 Stack / Heap 观测。
+- TIM7 ISR → Worker Thread Flags 基础通知验证（`adf5d5e`，`irq=30/40/50/60` 对应 `received`，`errors=0`）。
 
 待完成：
 
-- ISR → Task 通知实验。
-- ISR-safe API 验证。
+- ISR → Task 数据交接及高负载通知语义验证。
 - SPSC 并发读写实验。
 - 内存可见性与必要同步验证。
 - 并发情况下的溢出统计正确性。
@@ -780,6 +779,99 @@ Ring Buffer 单线程语义和串行协调的双 Task 确定性功能测试已�
 
 Full / Empty / Wrap-around 和 FIFO 顺序已完成验收。
 
-当前基础功能 checkpoint 为 `f8c3e52`。
+当前基础功能 checkpoint 为 `f8c3e52`；ISR → Task **事件通知** checkpoint 为 `adf5d5e`。
 
 ISR / Task 并发安全、覆盖模式、DMA 数据所有权和正式工业级告警机制仍待后续学习与验证。
+
+
+### 历史资料一致性待复核（2026-10-23）
+
+当前文档历史基线将 Ring Buffer 描述为 `uint8_t`、物理 8 B / 有效 7 B；此前上传的工程快照 `Inc/ring_buffer.h` 却为 `uint32_t buffer[8]`，`WriteByte` / `ReadByte` 参数也为 `uint32_t`。这两个来源不一致。最终集成前必须基于**最新仓库 HEAD**核对实际类型和字节数；若确认为 `uint32_t`，应按“物理 8 个元素 / 32 B、有效 7 个元素 / 28 B”描述，并评估 API 命名。不得据旧文档自行假设最新版源码已改为 `uint8_t`。
+
+
+## KG-010：TIM7 ISR → Task、NVIC 约束与事件合并
+
+### 来源
+
+2026-10-18～10-20 M4.5 TIM7 配置、FreeRTOS ISR API 核对及 STM32F407VGT6 板级通信实验。
+
+### 当前理解
+
+- TIM7 84 MHz 输入，PSC=8399、ARR=999，100 ms 更新事件。
+- TIM6 HAL 时基的 `HAL_IncTick()` 仅由 TIM6 分支调用，TIM7 可独立接入既有 HAL 回调。
+- TIM7 抢占优先级数值 5，在 4 位抢占优先级分组与 FreeRTOS Syscall IRQ 阈值数值 5 下允许执行相应 ISR-safe CMSIS-RTOS2 接口。
+- ISR 做最小工作：累加统计、Set Thread Flag；不使用同步日志和阻塞 API。
+- Worker 使用 `osThreadFlagsWait(osWaitForever)` 阻塞接收；Task 中进行非实时日志输出。
+- 当前 `irq=30/40/50/60` 和 `received` 在采样点一致，`errors=0`；仅证明当时 10 Hz 负载下的链路行为。
+- 相同 Flag bit 可合并，不能当成精确计数队列。
+
+### 缺少什么
+
+- 同一 Flag bit 被高频重复设置时的定量事件合并、吞吐量与处理延迟实测。
+- 高负载下抢占调度与 ISR/Task 临界区的时序分析。
+- IRQ 中断计数、Worker 接收计数与真实业务事件的严格一致性设计。
+- 使用 Queue 或数据缓冲传送多次事件的更强语义与超限处理。
+
+### 为什么重要
+
+M5 ADC DMA 会产生连续事件；只会通知并不足以保证业务样本未丢失，必须同时设计数据所有权和消费能力。
+
+### 学习优先级
+
+M4.5 基础链路已完成；在 M4 Final Integration 完成后继续深入，高负载实验不阻塞本次功能 checkpoint。
+
+### 学习任务
+
+- 保留已验证 TIM7 100 ms 事件通知基线。
+- 设计可观测的事件合并/过载实验，不在 ISR 打印日志。
+- 比较 Thread Flags 事件状态与无损计数/Queue 的差异。
+- 为 DMA Half/Full 的通知与数据交接制定不同的职责边界。
+
+### 小实验
+
+已完成：TIM7 100 ms、NVIC 中断优先级检查、Worker 阻塞/唤醒、低频通知统计、联合运行时资源采样。
+
+待完成：高负载事件合并量化与通知延迟测量；SPSC 数据并发实验。
+
+### 状态
+
+基础功能 PASS，`adf5d5e` 已提交并推送；高负载和数据所有权边界未验证。
+
+## KG-011：CubeMX 配置源、LF 规范与生成代码回归
+
+### 来源
+
+2026-10-18 多次 TIM7 代码生成引起 EOL-only 噪音以及 `TIM7.Period` 与 `tim.c` 暂时不同步的排查。
+
+### 当前理解
+
+- Git 索引 LF、工作区 CRLF、`.gitattributes` 要求 LF 可造成大量“已修改”噪音。
+- `core.autocrlf=false` 不保证 CubeMX 输出始终 LF。
+- 必须对照 `.ioc` 中配置与生成 C 文件值（例如 TIM7 ARR=999）。
+- 使用定向字节级 CRLF → LF 可以避免无意重新编码中文注释。
+- 代码生成后的 diff 应与功能范围一致，不能只根据构建成功判断源码未被覆盖。
+
+### 缺少什么
+
+- 更自动化且可重复的生成后 EOL 校验脚本与项目级 CI 规范。
+- CubeMX 版本更新对自定义 USER CODE 和中间件源文件的兼容性回归。
+
+### 为什么重要
+
+消除无关 diff 可以提高工程可审计性，避免覆盖已验证的 M4 模块和引入无法解释的修改。
+
+### 学习优先级
+
+中。M4 Final Integration 前需复用已经验证的流程。
+
+### 学习任务
+
+生成前备份；生成后检查 `git status`、`git ls-files --eol`、`git diff --ignore-space-at-eol`、`git diff --check`，定向处理并核对构建结果。
+
+### 小实验
+
+已完成：本次 TIM7 生成后恢复至有限文件 diff，构建与板级试验通过。
+
+### 状态
+
+当前问题已解决；流程自动化和 CI 集成待后续阶段。

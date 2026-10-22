@@ -1639,3 +1639,165 @@ MinHeap=4568 B
 
 - 功能 checkpoint：
   - `f8c3e52`：`feat: establish M4 ring buffer baseline`。
+
+
+## TEST-20261018-01：M4 Semaphore 恢复及原通信模块回归验证
+
+- 目标：
+  - 将 M4.4 Ring Buffer 临时测试与原 `SyncSem` 同步路径隔离。
+  - 恢复 `SemProducerTask` Release、`SemConsumerTask` Acquire 的行为。
+  - 验证 Queue、原 Thread Flags、Mutex、UART 和运行时资源没有回归异常。
+
+- 测试环境：
+  - MCU：STM32F407VGT6。
+  - FreeRTOS + CMSIS-RTOS2，USART2 + `debug_log`。
+  - Branch：`feature/m4-rtos-communication-baseline`。
+  - 修改位置：`Src/freertos.c`。
+  - 关联功能 checkpoint：`c4c0721`：`fix: restore M4 semaphore task baseline`。
+
+- 实施：
+  - 保留已验证 Ring Buffer 的测试代码/记录，以编译开关隔离临时测试入口。
+  - 恢复 Semaphore Producer / Consumer 的正确 Release / Acquire 角色，并使任务维持长期循环，不从任务入口返回。
+  - 执行 Debug 构建、板级串口观察及 Stack / Heap 监控。
+
+- 实际日志（节选）：
+
+```text
+[I][SEM] Consumer Waiting
+[I][SYS] Producer Released
+[I][SEM] Consumer Acquired
+[I][SEM] Consumer Waiting
+[I][M4Q] rx seq=16 value=160 tick=3002 count=0
+[I][M4M] seq=3 A value=11->12
+[I][M4M] seq=4 B value=12->22
+[I][M4F] set event, count=3 flags=0x00000001
+[I][M4F] event received, count=3 flags=0x00000001
+```
+
+- 实际资源采样：
+
+```text
+HeartFree=384 B    UARTFree=488 B
+M4ProdFree=808 B   M4ConsFree=496 B
+M4EvtFree=528 B    M4WorkFree=528 B
+SemProFree=288 B   SemConFree=288 B
+MutexAFree=520 B  MutexBFree=520 B
+Heap=4568 B       MinHeap=4568 B
+```
+
+- 构建记录（Semaphore 恢复时）：FLASH=33724 B / 1 MB（3.22%）；RAM=21112 B / 128 KB（16.11%）。
+- 验收：
+  - Semaphore 连续等待/释放/获取：PASS。
+  - Queue Sequence 连续、Mutex 共享数据连续、Task Flags 正常、UART 正常：PASS（提供的观察窗口）。
+  - Stack/Heap 有有效实测值，观察中未出现 HardFault / Hang：PASS（测试窗口内）。
+  - `git status` 和远程同步在 `c4c0721` 提交后确认 clean：PASS。
+
+- 边界：
+  - 此项测试专门验证 Semaphore 恢复，不等同于 M4 Final Integration。
+  - Ring Buffer 的基础测试仍有效，但未在此轮声称重新执行并发安全实验。
+  - 后续 M4ISR 新增 Worker 后必须重新测量 Heap 和 Stack。
+
+## TEST-20261020-01：M4.5 TIM7 ISR → Thread Flags → Worker Task 板级功能验证
+
+- 目标：
+  - 建立真实硬件定时器中断到 FreeRTOS Worker 的最小通知链路。
+  - 验证 TIM6 HAL Tick 不受 TIM7 影响。
+  - 核对 NVIC 与 FreeRTOS ISR-safe API 约束。
+  - 观察 `irq_count`、`received_count`、`notify_errors`。
+
+- 测试环境：
+  - STM32F407VGT6，FreeRTOS + CMSIS-RTOS2，USART2 debug logger。
+  - Branch：`feature/m4-rtos-communication-baseline`。
+  - 新增模块：`Inc/m4_isr.h`、`Src/m4_isr.c`。
+  - TIM7 自动生成：`Inc/tim.h`、`Src/tim.c`、IRQ Handler 和 HAL 回调集成。
+  - TIM6 作为 HAL 1 ms Timebase；SysTick 作为 FreeRTOS Kernel Tick。
+  - `TIM7` Timer Clock=84 MHz，Prescaler=8399，ARR=999，更新间隔 100 ms。
+  - TIM7 NVIC 抢占优先级 5；`configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY=5`；`configPRIO_BITS=4`；NVIC Grouping=4-bit 抢占优先级。
+
+- 关键路径：
+
+```text
+TIM7 update IRQ
+  -> TIM7_IRQHandler() / HAL_TIM_IRQHandler(&htim7)
+  -> HAL_TIM_PeriodElapsedCallback() / TIM7
+  -> M4ISR_OnTim7ElapsedFromISR()
+  -> osThreadFlagsSet(worker_handle, M4_ISR_TIM7_FLAG)
+  -> M4IsrWorkerTask / osThreadFlagsWait(osWaitForever)
+  -> Worker 计数和 Task Context 日志
+```
+
+- 设计约束：
+  - ISR 不调用同步 `LOG_xxx()`、`osDelay()` 或阻塞 API。
+  - `HAL_IncTick()` 仅位于 TIM6 分支；TIM7 回调不影响 HAL Tick。
+  - 新模块初始化及内部启动结果采用专属枚举状态码；统计查询接口 `uint32_t M4ISR_GetWorkerStackFree(void)` 返回数据值。
+  - Worker 配置 Stack=1024 B，创建后由 Worker 在正常 Task context 中启动 TIM7。
+
+- 构建：
+  - `cmake --build --preset Debug --clean-first` 完成 43/43，ELF / HEX / BIN 成功生成。
+  - FLASH=34748 B（3.31%）；静态 RAM=21192 B（16.17%）。
+  - `git diff --check` 无输出。
+
+- 实际板级日志：
+
+```text
+[I][M4ISR] irq=30 received=30 errors=0
+[I][M4ISR] irq=40 received=40 errors=0
+[I][M4ISR] irq=50 received=50 errors=0
+[I][M4ISR] irq=60 received=60 errors=0
+```
+
+- 实际结果：
+  - TIM7 每 100 ms 产生事件的配置满足 10 Hz 目标；日志中计数持续增长，未见通知错误。
+  - 截取的四个统计采样点中 IRQ 数与 Worker 接收数相等。
+  - 原 M4Q 观察 `seq=12..31` 连续，Count=0；M4F 正常对应；Semaphore 持续唤醒；Mutex 共享值连续；UART 周期输出正常。
+
+- 验收：
+  - TIM7 ISR → CMSIS-RTOS2 Thread Flags → Worker 基础功能：PASS。
+  - 原有 M4 模块在所提供窗口内无明显回归：PASS。
+  - IRQ-safe API 优先级约束源码/配置检查：PASS。
+
+- 边界：
+  - Thread Flags 可能合并重复 Set；低负载 `irq == received` 不证明所有负载都能无损计数。
+  - 事件通知实现不代表 Ring Buffer ISR / Task 共享数据已验证。
+  - 不在此记录中声称测得精确中断服务延迟或最坏响应时间。
+
+- 功能 checkpoint：`adf5d5e`：`feat: establish M4 ISR to task notification baseline`（用户确认已推送远程）。
+
+## TEST-20261020-02：M4.5 持续运行与 FreeRTOS Stack / Heap 观察
+
+- 目标：
+  - 在 ISR Worker 与 Queue、原 Thread Flags、Semaphore、Mutex、UART 并行运行的状态下检查持续通知和系统资源。
+  - 记录 Worker Task High Water Mark、Current Free Heap 和 Minimum Ever Free Heap。
+
+- 测试条件：
+  - TIM7 IRQ 10 Hz，M4ISR Worker Stack 配置 1024 B。
+  - 使用 SYS 任务周期资源监测日志。
+  - 用户后续明确确认“运行测试均通过”；当前对话未附最终运行分钟数和结束时的完整 IRQ/Heap 日志，不补写未经提供的精确值。
+
+- 中间窗口资源采样（连续两轮一致）：
+
+```text
+[I][SYS] HeartFree=384 B UARTFree=480 B M4ProdFree=808 B M4ConsFree=496 B
+[I][SYS] M4EvtFree=528 B M4WorkFree=528 B Heap=3432 B MinHeap=3432 B
+[I][SYS] SemProFree=288 B SemConFree=288 B MutexAFree=520 B MutexBFree=520 B
+[I][SYS] ISRWorkerFree=520 B
+```
+
+- 前后资源对比：
+  - M4ISR 增加前（Semaphore 恢复阶段）：Free Heap=4568 B。
+  - M4ISR 增加后（本轮采样）：Free Heap=3432 B、Minimum Ever Free Heap=3432 B。
+  - 差值：1136 B。与 Worker 1024 B Stack + 对象及分配开销方向一致，但尚不逐字节拆分 RTOS 对象成本。
+  - Worker 历史最小剩余 Stack=520 B，Semaphore 两 Task 最小剩余均为 288 B，需要持续观察后续异常路径。
+
+- 运行结论：
+  - 用户报告后续持续运行测试全部通过；当前已提供的日志采样没有观察到异常复位、HardFault、Hang 或 Heap 降低。
+  - 现有日志支持所示时段资源稳定，不外推为系统级所有场景的长期可靠性证明。
+  - 该项可作为 M4.5 基线验收依据，不替代 M4 Final Integration。
+
+- 未覆盖 / 未附证据：
+  - 长期运行结束时的准确 `irq/received/errors` 最终记录。
+  - M4 完整联合最终 NRST ×3 / Power-cycle ×3。
+  - Ring Buffer SPSC 真正并发访问测试。
+  - 高负载条件下同一 Thread Flag bit 合并量化。
+
+- 功能 checkpoint：`adf5d5e`。

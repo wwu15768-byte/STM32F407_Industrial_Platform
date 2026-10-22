@@ -166,6 +166,14 @@
 
 ## M4：RTOS 通信、同步和数据缓冲（当前）
 
+**当前进度校准（2026-10-23）**
+
+- M4.1 Queue、M4.2 Task Thread Flags、M4.3 Binary Semaphore / Mutex、M4.4 Ring Buffer Basic 均已完成既定基础实验。
+- 2026-10-18 前后完成 Semaphore 从临时 Ring Buffer 测试角色的恢复；功能提交 `c4c0721`。
+- M4.5 TIM7 100 ms IRQ → `osThreadFlagsSet()` → Worker `osThreadFlagsWait()` 已通过首次板级和用户确认的持续运行验证；功能提交 `adf5d5e` 已同步远程。
+- 当前 M4 **尚未关闭**：需完成 Final Integration、最终系统级稳定性与重启验证、模块收敛及文档 checkpoint。
+- ISR → Task 事件通知通过 **不意味着** Ring Buffer SPSC 并发访问、DMA 数据所有权已经验证；这些仍保留为独立边界。
+
 **Goal**
 
 建立后续采集和通信模块所需的最小并发基础，能够根据数据、事件、同步和共享资源的不同语义选择正确机制。

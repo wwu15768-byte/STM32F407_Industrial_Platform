@@ -3,44 +3,42 @@
 > 唯一回答：项目现在在哪？
 > 更新时机：项目状态发生明显变化时。
 
-更新时间：2026-10-16
+更新时间：2026-10-23
 
 ## Current Milestone
 
-M4：RTOS 通信、同步和数据缓冲。M0～M3 已完成，M4 为当前阶段。
+M4：RTOS 通信、同步和数据缓冲（当前阶段，尚未最终关闭）。M0～M3 已完成。
 
-M4.1 Queue Producer / Consumer baseline 已完成。
+- M4.1 Queue：完成。
+- M4.2 CMSIS-RTOS2 Thread Flags Task → Task：完成，已验证重复 Flag 合并。
+- M4.3 Binary Semaphore / Mutex：基础验证完成；2026-10-18 前后已恢复 Semaphore 可运行基线并完成回归。
+- M4.4 Ring Buffer：Empty、Full、Wrap-around、FIFO 与溢出计数确定性功能验证完成；并发安全仍未验收。
+- M4.5 TIM7 ISR → Thread Flags → Worker Task：构建、首次板级与用户确认的持续运行验证通过；功能 checkpoint 已提交并推送。
+- M4 Final Integration：待开始，包括模块职责收敛、联合稳定性及重启验收。
 
-M4.2 Task Notification / CMSIS-RTOS2 Thread Flags baseline 已完成正常通知、重复事件合并、资源和稳定性验证。
-
-M4.3 Binary Semaphore Task → Task 同步和 Mutex 共享资源保护对比已完成历史板级验证及 Stack / Heap 调优。
-
-M4.4 独立 Ring Buffer 已完成 Empty、Full、Wrap-around、FIFO 顺序和溢出统计确定性板级验证。
-
-当前下一步为 M4.5 ISR → Task 通信边界。
-
-M4 整体尚未关闭，不进入 M5。
+M5 ADC + Timer + DMA 尚未开始。
 
 ## Current Goal
 
-当前 Queue、Thread Flags、Binary Semaphore、Mutex 和 Ring Buffer 的基础实验均已有对应板级验证记录。
+完成 M4.5 文档与测试证据同步，并推进 M4 Final Integration。已完成的 M4.5 最小链路为：
 
-Ring Buffer 当前采用固定容量、静态存储、预留一个空槽、满时拒绝写入和累计溢出计数的设计。
+```text
+TIM7 100 ms Update IRQ
+  -> TIM7_IRQHandler()
+  -> HAL_TIM_PeriodElapsedCallback() / TIM7 分支
+  -> M4ISR_OnTim7ElapsedFromISR() / osThreadFlagsSet()
+  -> M4IsrWorkerTask / osThreadFlagsWait(osWaitForever)
+```
 
-下一步先恢复或隔离 Ring Buffer 临时测试任务，确保原 Binary Semaphore 实验可重新运行。
+TIM6 继续独立作为 HAL 1 ms Timebase；回调中的 `HAL_IncTick()` 只由 TIM6 分支调用。TIM7 NVIC 抢占优先级为 5，FreeRTOS 最大可调用系统 API 的数值优先级阈值为 5（4 bits 抢占优先级）。
 
-随后建立最小 ISR → Task 通信实验，明确：
+当前不应把低负载下 `irq == received` 当作高负载无损计数保证；同一个 Thread Flag bit 允许合并。ISR 内不调用同步 `LOG_xxx()` 或阻塞接口，正式的采样数据所有权留待后续专项设计。
 
-- ISR-safe API。
-- ISR 非阻塞规则。
-- Task 阻塞和唤醒。
-- 事件状态与数据缓冲的职责边界。
-- Ring Buffer SPSC 数据所有权。
-- ISR / Task 并发访问边界。
-
-M4 完成 ISR → Task、模块收敛、完整稳定性与文档收尾前，不进入 M5 ADC + Timer + DMA 业务实现。
+M4 最终关闭前还须按最新 `ring_buffer.h` 核对 Ring Buffer 数据元素类型、字节容量与历史文档记载不一致的问题；当前仍不宣称 Ring Buffer ISR/Task 并发安全。
 
 ## Completed
+
+> 以下为按时间积累的历史完成事项，其中早期出现的“当前”只表示当时的基线；最新状态以本文件上方的 Current Milestone / 下方的 Last Verified Function 为准。
 
 - 确认仓库根目录为 `STM32F407_Industrial_Platform`。
 - 验证 STM32CubeMX、STM32CubeCLT、CMake、Ninja、GNU Arm Toolchain、CubeProgrammer CLI、ST-LINK GDB Server 和 Git。
@@ -263,7 +261,7 @@ M4 完成 ISR → Task、模块收敛、完整稳定性与文档收尾前，不�
   - FreeRTOS Current Free Heap：4568 B。
   - FreeRTOS Minimum Ever Free Heap：4568 B。
 - Stack 总增量约 1536 B，Free Heap 同样减少约 1536 B，资源变化符合预期。
-- 当前最终构建：
+- M4.3 阶段历史构建（不代表最新 M4.5）：
   - RAM：21112 B / 128 KB，16.11%。
   - FLASH：33724 B / 1 MB，3.22%。
 - 已形成并推送 `c84fed8：fix: increase M4 synchronization task stack margins`。
@@ -272,7 +270,7 @@ M4 完成 ISR → Task、模块收敛、完整稳定性与文档收尾前，不�
   - `Inc/ring_buffer.h`
   - `Src/ring_buffer.c`
 - 已通过根目录 `CMakeLists.txt` 加入 Ring Buffer 构建。
-- Ring Buffer 使用固定 8 B 数组，实际有效容量为 7 B。
+- 旧版测试文档将 Ring Buffer 记为固定 8 B 数组、有效容量 7 B；后续发现与已上传源码快照的 `uint32_t buffer[8]` 不一致，需依据最新头文件核对元素宽度与字节数。
 - 已实现 RingBuffer_Init / WriteByte / ReadByte / IsEmpty / IsFull。
 - 使用 head / tail 索引及预留一个空槽区分 Empty 和 Full。
 - Full 时拒绝新数据写入，并通过 `overflow_count` 记录拒绝次数。
@@ -284,140 +282,98 @@ M4 完成 ISR → Task、模块收敛、完整稳定性与文档收尾前，不�
 - 最终读写索引为 head=1、tail=1。
 - 已观察到 Queue、Thread Flags、Mutex 和 UART 在同一测试固件中持续输出。
 - 本轮 FreeRTOS Heap=4568 B、MinHeap=4568 B。
-- 当前 SemProducerTask / SemConsumerTask 临时复用为 Ring Buffer 测试任务。
-- 本轮 Ring Buffer 功能测试不代表原 Binary Semaphore 已重新回归。
+- 2026-10-16 Ring Buffer 测试固件曾临时复用 SemProducerTask / SemConsumerTask；该临时状态已在后续 Semaphore 恢复中结束。
+- 2026-10-16 的 Ring Buffer 测试本身未覆盖 Semaphore 回归；后续已单独通过。
 - 已形成功能 checkpoint：
   - `f8c3e52`：`feat: establish M4 ring buffer baseline`。
 - `f8c3e52` 已成功推送至远程 M4 功能分支。
 - M4.4 Ring Buffer 基础功能已完成，ISR / Task 并发安全仍未验收。
-
+- Semaphore 已由 Ring Buffer 临时测试入口恢复并完成真实板级功能回归，形成并推送 `c4c0721`。
+- 已使用 TIM7 完成 M4.5 实际 IRQ → `osThreadFlagsSet()` → Worker 阻塞唤醒链路。
+- 已在 TIM7 优先级 5、FreeRTOS 阈值 5、4 位抢占优先级分组条件下完成 ISR-safe API 约束核对。
+- 已观察 `irq=30/40/50/60` 对应 `received=30/40/50/60`、`errors=0`。
+- 与 M4ISR 并行运行时原 Queue、Semaphore、Mutex、Task Flags 和 UART 继续正常输出。
+- 新增 ISR Worker 后测得 Stack 历史最小剩余 520 B，Heap/MinHeap 3432 B；用户确认后续持续运行测试通过。
+- M4.5 独立功能 checkpoint：`adf5d5e`，已推送远程；用户确认本地分支 clean。
 
 ## In Progress
 
-M4.1 Queue Producer / Consumer 已完成。
-
-M4.2 Task Notification / CMSIS-RTOS2 Thread Flags 已完成。
-
-M4.3 Binary Semaphore 与 Mutex 基础验证已完成，包括历史联合运行和 Stack / Heap 调优。
-
-M4.4 Ring Buffer 基础功能已完成，包括 Empty、Full、Wrap-around、FIFO 和溢出计数的确定性板级验证。
-
-当前准备进入 M4.5 ISR → Task 通信边界。
-
-进入 ISR → Task 前，需要恢复或隔离临时复用的 Semaphore Task。
-
-当前 Semaphore / Mutex 实验代码仍有一部分位于 CubeMX 生成的 `freertos.c`，M4 最终关闭前需要与 `DEC-20260930-01` 的模块化决策重新核对。
-
-M4 Final Integration、长期稳定性和复位恢复仍未完成。
+- M4.1～M4.5 的基础功能及指定实验已完成；M4.5 测试记录和文档收尾正在处理。
+- 下一任务：M4 Final Integration，验证所有保留的正式通信机制在同一当前固件中的职责边界和联合运行。
+- 进一步确定 Ring Buffer 的保留测试模式与元素类型；测试逻辑不能占用正式 Semaphore 任务。
+- 对 Queue、Thread Flags、Semaphore、Mutex、Ring Buffer 基本功能和 TIM7 ISR 通知进行完整回归，记录完整构建资源、Stack / Heap、长期稳定性以及 NRST ×3 / 断电重启 ×3。
+- 再决定是否关闭 M4，不能直接将 2026-10-20 的 M4.5 通过等同于 M4 Final Integration 完成。
 
 ## Blocked
 
-当前无已确认的外部阻塞。
-
-M4.5 需要先完成 ISR-safe API 和测试中断源选择。
+当前无已确认的外部阻塞。M4 Final Integration 所需的最终联合回归与重启测试尚待执行。
 
 ## Known Bugs
 
-当前无已确认且尚未解决的固件运行 Bug。
+当前日志中无已确认且尚未解决的固件运行 Bug。
 
-M4.1 Queue 压力日志路径曾出现 Producer Stack 余量不足，已通过调整解决。
-
-M4.3 Semaphore / Mutex Task 曾出现 Stack 安全余量过低，已通过调整解决。
-
-M4.4 开发过程中曾出现指针使用、宏名称、错误码和读取日志问题，已在确定性测试前修正。
-
-当前 Ring Buffer 不具备已验证的 ISR / Task 并发安全保证，属于未完成能力，不作为已确认 Bug。
-
-当前 Semaphore 两个 Task 被临时复用于 Ring Buffer 测试，原 Semaphore 功能需要恢复或隔离后重新回归。
-
-CubeMX Generate Code 可能产生 EOL-only 工作区噪音，属于开发流程问题。
-
-当前 `LOG_xxx()` 不是 ISR-safe API。
+- M4.1 Queue Producer 历史 Stack 不足、M4.3 同步任务 Stack 余量不足，已在既有 checkpoint 调优。
+- M4.4 Ring Buffer Consumer 曾因未检查读取返回状态重复打印旧值，已修复并有确定性测试记录。
+- CubeMX Generate Code 曾将 LF 工作区文件改为 CRLF，导致大量 Git 工作区噪声；已用字节级定向 CRLF → LF 方式恢复，仍属于每次重新生成后要检查的开发流程风险。
+- TIM7 早期生成的 ARR 为 9，与目标 999 不一致；随后确认 `.ioc` 为 `TIM7.Period=999`、重新生成的 `Src/tim.c` 为 999，已解决。
+- Ring Buffer 文档的数据类型/字节容量与先前上传的源码快照不一致，属于待复核的文档一致性问题，而非已证实的运行 Bug。
+- Ring Buffer SPSC 并发安全、ISR/Task 共享数据以及 DMA Ownership 均未验证；不是当前 M4.5 已完成能力。
+- 当前同步 `LOG_xxx()` 不是 ISR-safe。
 
 ## Current Branch
 
 - 当前 Branch：`feature/m4-rtos-communication-baseline`。
 - Upstream：`origin/feature/m4-rtos-communication-baseline`。
-- Ring Buffer 功能 checkpoint：`f8c3e52`，`feat: establish M4 ring buffer baseline`。
-- M4 同步文档 checkpoint：`5c9efac`，`docs: record M4 synchronization baseline verification`。
-- 同步任务 Stack 调优 checkpoint：`c84fed8`。
-- Mutex 功能 checkpoint：`c5bc54a`。
-- Binary Semaphore 功能 checkpoint：`435ba4f`。
-- Thread Flags 功能 checkpoint：`fd80cc9`。
-- Queue 功能 checkpoint：`b78282c`。
-- M4 起点：`c13b8e5`。
-- `f8c3e52` 已成功推送至远程。
-- 功能提交完成后曾确认 Working Tree clean。
-- 当前文档修改尚待形成独立提交。
+- 最新已确认 HEAD：`adf5d5e`：`feat: establish M4 ISR to task notification baseline`。
+- 本地 `HEAD` 与 `origin/feature/m4-rtos-communication-baseline` 均为 `adf5d5e`，用户提供的 `git status` 为 `nothing to commit, working tree clean`。
+- Semaphore 恢复：`c4c0721`：`fix: restore M4 semaphore task baseline`。
+- Ring Buffer 文档：`5b0240b`：`docs: record M4 ring buffer baseline verification`。
+- Ring Buffer 功能：`f8c3e52`；M4 同步文档：`5c9efac`；Stack 调优：`c84fed8`；Mutex：`c5bc54a`；Semaphore：`435ba4f`。
+- M4.5 功能提交已同步远程；**此 ZIP 的文档更新尚未应用到本地仓库、未提交或推送**，不得假设出现新的 docs commit。
 
 ## Last Verified Function
 
-- 当前最新功能验收为 M4 Ring Buffer 确定性板级测试。
-- Ring Buffer 物理容量：8 B。
-- Ring Buffer 有效容量：7 B。
-- 数据类型：`uint8_t`。
-- 使用 head / tail 索引和预留空槽设计。
-- Full 时拒绝写入，并累计 overflow_count。
-- 确定性测试结果：
+当前最新功能验收：M4.5 TIM7 ISR → Thread Flags → Worker Task。
+
+- TIM7 配置：输入定时器时钟 84 MHz，PSC=8399，ARR=999，预期 100 ms / 10 Hz。
+- 优先级：TIM7 NVIC Preemption=5，`configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY=5`，`configPRIO_BITS=4`，NVIC Grouping 为 4 bits 抢占优先级。
+- TIM6 HAL 1 ms Timebase 不受 TIM7 回调影响：`HAL_IncTick()` 仅 TIM6 分支执行。
+- M4.5 真实日志采样：
 
 ```text
-EMPTY       PASS
-FULL        PASS
-FULL READ   PASS
-WRAP WRITE  PASS
-WRAP READ   PASS
-
-overflow_count = 1
-Final head     = 1
-Final tail     = 1
+[I][M4ISR] irq=30 received=30 errors=0
+[I][M4ISR] irq=40 received=40 errors=0
+[I][M4ISR] irq=50 received=50 errors=0
+[I][M4ISR] irq=60 received=60 errors=0
 ```
 
-- 本轮联合运行观察：
-  - Queue Sequence 连续至 46。
-  - Thread Flags Set / Receive 对应至 9。
-  - Mutex 共享数据更新连续。
-  - UART 周期输出正常。
-  - 原 Binary Semaphore 未在本轮重新验证。
-
-- 本轮 Stack / Heap 观察：
+- 当前低负载窗口各采样点相等；不推断高负载时 Thread Flags 不会合并事件。
+- 原 Queue 的日志 `seq=12..31` 连续、`value = seq × 10`、`count=0`；Semaphore 持续释放/获取；Mutex 临界区 `seq=3..6`、共享值连续；原 M4F Set/Receive 对应；UART 正常。
+- M4ISR 与原 M4 基线联合运行期间的资源采样：
 
 ```text
-HeartFree=384 B
-UARTFree=488 B
-M4ProdFree=808 B
-M4ConsFree=496 B
-M4EvtFree=504 B
-M4WorkFree=528 B
-SemProFree=248 B
-SemConFree=256 B
-MutexAFree=520 B
-MutexBFree=520 B
-Heap=4568 B
-MinHeap=4568 B
+HeartFree=384 B     UARTFree=480 B
+M4ProdFree=808 B    M4ConsFree=496 B
+M4EvtFree=528 B     M4WorkFree=528 B
+SemProFree=288 B    SemConFree=288 B
+MutexAFree=520 B   MutexBFree=520 B
+ISRWorkerFree=520 B
+Heap=3432 B        MinHeap=3432 B
 ```
 
-- 当前日志覆盖约 9 秒。
-- 当前观察窗口未发现 HardFault、Hang 或 Heap 持续下降。
-- 本轮未执行完整长期稳定性、NRST ×3、Power-cycle ×3。
-- Ring Buffer ISR / Task 并发安全尚未验证。
-- 本轮没有新的 Flash / RAM 占用数据，不将旧构建结果写为当前结果。
-- 当前最新功能 checkpoint：`f8c3e52`。
+- 与添加 M4ISR Worker 前的 `Heap=4568 B` 相比，运行时当前 Free Heap 减少 1136 B；Worker 配置 Stack 1024 B。
+- 本阶段的干净构建记录：FLASH 34748 B（3.31%），RAM 21192 B（16.17%）；不等同于动态 Heap 使用。
+- 用户随后确认持续运行测试均通过；本次提供的材料没有附上最终结束时间/完整末尾计数，不虚构具体分钟数或最终 IRQ 总数。
+- 没有证据表明本次进行了 **M4 Final Integration** 所需的 NRST ×3 / Power-cycle ×3、Ring Buffer SPSC 并发压力测试。
+- 最新确认功能提交：`adf5d5e`，并已推送远程。
 
 ## Next Step
 
-进入 M4.5 ISR → Task 通信边界。
-
-1. 完成 Ring Buffer 文档记录及独立文档 checkpoint。
-2. 恢复或隔离临时 Ring Buffer 测试任务。
-3. 重新确认 Binary Semaphore 原功能可回归。
-4. 选择最小可控中断源。
-5. 核对 CMSIS-RTOS2 ISR-safe API。
-6. 建立 ISR → Task 最小事件通知实验。
-7. 验证 ISR 非阻塞和 Task 唤醒行为。
-8. 明确 Ring Buffer SPSC 读写所有权。
-9. 验证必要的同步与内存访问约束。
-10. 重新测量 Stack、Heap 和完整构建资源。
-11. M4 Final Baseline 前检查 `freertos.c` 与 `m4_ipc` 职责边界。
-12. 完成最终联合稳定性、NRST / Power-cycle 和 Git 收尾。
-
-暂不进入 M5 ADC + Timer + DMA。
+1. 将本次 ZIP 中九份 Markdown 文档覆盖/合并回本地 `docs/`，检查 diff 和事实准确性。
+2. 单独提交 M4.5 文档 checkpoint（提交号尚未产生），保留 `adf5d5e` 功能提交不变。
+3. 进入 **M4 Final Integration**：整理临时 Ring Buffer 测试入口，复核实际 `ring_buffer.h` 与文档类型/容量一致性，确定当前正式保留功能。
+4. 完整回归 Queue / Task Flags / Semaphore / Mutex / Ring Buffer Basic / TIM7 ISR → Task；注意 Ring Buffer Basic != SPSC 并发安全。
+5. 记录干净构建、FreeRTOS Stack High Water Mark、Current Free Heap、Minimum Ever Free Heap 和异常路径结果。
+6. 执行 M4 Final Baseline 长时间运行、NRST ×3、完全断电重启 ×3，按真实证据标记通过与否。
+7. 检查 `.ioc` / CubeMX 生成代码与独立用户模块的边界，避免无意义的 CRLF/LF diff；记录 Commit/PR 并准备 M4 关闭。
+8. **M4 关闭前不启动 M5 ADC + Timer + DMA 业务实现**。
