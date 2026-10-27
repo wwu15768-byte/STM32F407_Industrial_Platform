@@ -50,6 +50,23 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Src/m4_isr.c
 )
 
+option(
+    M4_ENABLE_SPSC_TEST
+    "Enable temporary SPSC concurrency test"
+    OFF
+)
+
+if(M4_ENABLE_SPSC_TEST)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        Src/m4_spsc_test.c
+    )
+
+    target_compile_definitions(
+        ${CMAKE_PROJECT_NAME} PRIVATE
+        M4_ENABLE_SPSC_TEST=1
+    )
+endif()
+
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths

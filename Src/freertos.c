@@ -33,6 +33,9 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
+#if defined(M4_ENABLE_SPSC_TEST)
+#include "m4_spsc_test.h"
+#endif
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -218,6 +221,13 @@ void MX_FREERTOS_Init(void) {
   {
       Error_Handler();
   }
+
+  #if defined(M4_ENABLE_SPSC_TEST)
+  if (M4SpscTest_Init() != M4_SPSC_OK)
+  {
+    Error_Handler();
+  }
+  #endif
     /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -311,6 +321,14 @@ void StartUARTTask(void *argument)
       LOG_INFO("SYS",
          "ISRWorkerFree=%lu B",
          (unsigned long)isr_worker_stack_free);
+
+#if defined(M4_ENABLE_SPSC_TEST)
+      LOG_INFO(
+            "SYS",
+            "SpscPFree=%lu B SpscCFree=%lu B",
+            (unsigned long)M4SpscTest_GetProducerStackFree(),
+            (unsigned long)M4SpscTest_GetConsumerStackFree());
+#endif
     }
     osDelay(1000U);
   }
