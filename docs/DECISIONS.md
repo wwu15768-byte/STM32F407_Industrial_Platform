@@ -187,3 +187,24 @@
 - 原因：本次 Generate Code 曾使大量 FreeRTOS 中间件文件显示为修改，但归一化后真实变化只集中在 TIM7 配置与接入文件。
 - 影响：不得使用 `git reset --hard`、不审查就 `git add .`、或全库 `git add --renormalize .` 来清理本次工作区；重新生成后先确认 `.ioc` 的 TIM7.Period 与 `Src/tim.c` 的 ARR 一致。
 - 资料一致性待办：既有 Ring Buffer 文档写成 `uint8_t` / 有效 7 B，而 2026-10-17 早期源码快照 `ring_buffer.h` 出现 `uint32_t buffer[8]` / 有效 7 个元素。此处作为待复核事实差异记录，**不要在未检查最新头文件前静默改动已验收的历史报告**。
+
+
+## DEC-20261027-01：Ring Buffer Task ↔ Task SPSC 使用 C11 原子索引及独立压力验证
+
+- 状态：已接受；STM32F407 + FreeRTOS 单生产者单消费者专项测试通过。
+- 决策：保持 `Inc/ring_buffer.h`、`Src/ring_buffer.c` 与 HAL/RTOS 解耦，数据元素为 `uint32_t`，物理数组 `buffer[8]`、有效容量 7 个元素（有效 28 B，而非旧文档所称 7 B）。保留一空槽、Full 拒绝写入、不覆盖待消费元素。
+- 决策：`head` / `tail` 使用 C11 `_Atomic uint32_t`；发布写入后使用 release 存储 `head`，消费侧使用 acquire 读取 `head`；消费完成后对 `tail` release，生产侧 acquire 观察 `tail`。只允许 Producer 推进 head、Consumer 推进 tail。
+- 决策：`overflow_count` 在本实现中计数 Full 写入尝试失败次数；当上层重试同一元素成功时，不把 Full 次数直接解释为丢失的数据个数。
+- 决策：新增 `m4_spsc_test` 两个独立测试任务与 CMake `M4_ENABLE_SPSC_TEST` 可选开关（默认 OFF），不复用 Semaphore Task 的生产/消费职责；测试接口需要状态结果时沿用模块专属枚举规范。
+- 原因：先前 Ring Buffer 的 Thread Flags 分阶段测试证明 Empty/Full/Wrap，但不证明两个任务真正并发下的内存可见性、顺序与完整性；原子 acquire/release 能建立正确的数据发布/消费次序。
+- 板级证据：`PASS sent=50000 recv=50000 full=7064 empty=7419`，`overflow=7064 elapsedTicks=7501`；SPSC Producer/Consumer 历史最小剩余栈分别 `876 B / 444 B`，Heap/MinHeap `3432 B`（采样窗口）。
+- Git：`d93665e`（`feature/m4-spsc-concurrency-verification`，已推送远程）；是否通过 PR 合入 M4 主开发分支尚未确认。
+- 影响/边界：这项决策**补充并部分修正** `DEC-20261016-01` 的旧字节宽度口径和“并发未验收”的历史状态，不重写 10 月 16 日已发生的测试事实。仅覆盖 Task ↔ Task SPSC，不宣称 ISR ↔ Task、DMA Cache/Buffer Ownership、多个生产者或可覆盖旧数据的并发安全。
+
+## DEC-20261027-02：M4 SPSC 压力测试保留为默认关闭的可选构建
+
+- 状态：已接受（代码设计和单次板级压力测试已验证；正式 OFF 模式已回归）。
+- 决策：保留可复现专项测试源文件，通过 `-DM4_ENABLE_SPSC_TEST=ON/OFF` 控制测试任务构建/创建；M4 正式使用的 Ring Buffer 原子并发修正应始终保留，不能因关闭专项测试而回退。
+- 原因：便于未来 M5/M14 持续回归，同时避免默认固件永久运行 50,000 元素压力任务、污染资源与时序指标。
+- 验证要求：显式设置 OFF 并重新配置 CMake、Clean Build、烧录，确认无 `[SPSC] START` 且其他 M4 模块仍正常；本要求目前未附明确验收记录。
+- 合并策略：先从独立 SPSC 分支通过 PR 合入 M4 分支，完成系统级验收与文档，之后才考虑 M4 → `main`；不得仅凭独立分支 clean 就宣布 M4 已关闭。

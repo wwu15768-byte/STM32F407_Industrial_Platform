@@ -166,13 +166,16 @@
 
 ## M4：RTOS 通信、同步和数据缓冲（当前）
 
-**当前进度校准（2026-10-23）**
+**当前进度校准（2026-10-27）**
 
 - M4.1 Queue、M4.2 Task Thread Flags、M4.3 Binary Semaphore / Mutex、M4.4 Ring Buffer Basic 均已完成既定基础实验。
 - 2026-10-18 前后完成 Semaphore 从临时 Ring Buffer 测试角色的恢复；功能提交 `c4c0721`。
 - M4.5 TIM7 100 ms IRQ → `osThreadFlagsSet()` → Worker `osThreadFlagsWait()` 已通过首次板级和用户确认的持续运行验证；功能提交 `adf5d5e` 已同步远程。
-- 当前 M4 **尚未关闭**：需完成 Final Integration、最终系统级稳定性与重启验证、模块收敛及文档 checkpoint。
-- ISR → Task 事件通知通过 **不意味着** Ring Buffer SPSC 并发访问、DMA 数据所有权已经验证；这些仍保留为独立边界。
+- 2026-10-27 已完成 Ring Buffer Task ↔ Task SPSC 并发专项：50,000 个 `uint32_t` 顺序校验 PASS；Full=7064、Empty=7419，`overflow=7064`，耗时 7501 OS ticks。采用 C11 原子 head/tail 的 acquire/release，数据有效容量为 7 个元素 / 28 B。
+- SPSC 专项功能提交 `d93665e` 已推送独立 `feature/m4-spsc-concurrency-verification`，父级 M4 Branch 已知 `405b9ab`；PR 合并状态尚未确认。
+- M4 原先临时 Ring Buffer 自检 + 原 M4 通信模块在同一固件上联合运行、用户确认持续运行通过；与真正 SPSC 压力测试区分记录。
+- 当前 M4 **尚未正式关闭**：仍需补充 SPSC OFF 正式固件构建/烧录回归、最终 NRST ×3 / Power-cycle ×3、合并后验证及文档 checkpoint。
+- Task ↔ Task SPSC 已验证；**ISR ↔ Task Ring Buffer、DMA 数据所有权、多生产者访问**仍属于未验证边界。
 
 **Goal**
 
@@ -184,7 +187,7 @@
 - Task Notification：轻量事件、计数或信号。
 - Mutex：保护共享资源并理解其所有者语义。
 - Binary Semaphore：任务/中断之间的同步，不用于表达 Mutex 所有权。
-- Ring Buffer：缓存连续流式数据。
+- Ring Buffer：缓存连续流式数据；当前 Task ↔ Task 单生产者/单消费者并发基线已验证。
 - 生产者/消费者、数据所有权、ISR 与 Task 边界、`FromISR` API 和临界区基本使用。
 
 **Implementation**
@@ -200,14 +203,14 @@
 1. 两个或以上 Task 能通过 Queue 正确传递结构化数据。
 2. Task Notification 实验能稳定完成一次 Task/Task 或 ISR/Task 通知链路。
 3. 能结合实际代码解释 Mutex 与 Binary Semaphore 的差异。
-4. Ring Buffer 的基本读写、满、空、索引回绕和边界处理通过测试。
+4. Ring Buffer 的基本读写、满、空、索引回绕和边界处理通过测试；扩展的 Task ↔ Task SPSC 50,000 元素并发专项已通过。
 5. ISR 中没有耗时日志、复杂计算或阻塞 API。
 6. 形成构建、运行、异常边界和板级测试记录。
 
 **Deliverables**
 
-- 最小 Queue、Notification、Semaphore 和 Ring Buffer 实验代码。
-- 并发机制选择说明、数据所有权说明和 M4 测试记录。
+- 最小 Queue、Notification、Semaphore 和 Ring Buffer 实验代码；可选构建的 `m4_spsc_test` 专项压力测试代码。
+- 并发机制选择说明、数据所有权说明和 M4 测试记录；SPSC 原子内存序、可见性和 Full 重试计数语义记录。
 
 ## M5：ADC + Timer + DMA 数据采集子系统
 

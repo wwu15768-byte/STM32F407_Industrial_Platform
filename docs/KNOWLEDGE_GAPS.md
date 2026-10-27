@@ -789,6 +789,16 @@ ISR / Task 并发安全、覆盖模式、DMA 数据所有权和正式工业级�
 当前文档历史基线将 Ring Buffer 描述为 `uint8_t`、物理 8 B / 有效 7 B；此前上传的工程快照 `Inc/ring_buffer.h` 却为 `uint32_t buffer[8]`，`WriteByte` / `ReadByte` 参数也为 `uint32_t`。这两个来源不一致。最终集成前必须基于**最新仓库 HEAD**核对实际类型和字节数；若确认为 `uint32_t`，应按“物理 8 个元素 / 32 B、有效 7 个元素 / 28 B”描述，并评估 API 命名。不得据旧文档自行假设最新版源码已改为 `uint8_t`。
 
 
+### 2026-10-27 SPSC 并发专项补充（覆盖上方当时的“待完成”状态）
+
+- 已完成：在独立 SPSC Producer / Consumer Task 中，无逐元素 Thread Flags 阶段同步，完整传输 `50000` 个递增 `uint32_t` 元素；测试输出 `PASS`，Full 重试 `7064`、Empty 重试 `7419`、Overflow 计数 `7064`。
+- 已完成：理解 C11 `_Atomic` `head/tail` 的 acquire/release 数据发布顺序；Producer 只写 `head`、Consumer 只写 `tail`，各自通过 acquire 检查对侧游标，满时保留当前待发送元素并重试。
+- 数据容量核准：物理 8 个 `uint32_t` = 32 B，预留空槽有效 7 个 `uint32_t` = 28 B；历史的 8 B / 7 B 记录是当时误记，保留历史原文并以本条修正现行理解。API `WriteByte`/`ReadByte` 名称仍需与实际元素宽度做命名规范评审。
+- 实测：`elapsedTicks=7501`；`SpscPFree=876 B`、`SpscCFree=444 B`、`Heap=MinHeap=3432 B`（展示采样）。
+- 已实现范围：**Task ↔ Task 单生产者单消费者并发**；不代表 ISR ↔ Task 共享环形缓存、MPSC / MPMC、DMA 数据块所有权已验证。
+- 待深化：复位恢复专项、不同编译优化级别下的性能、满载吞吐/时延上界、DMA Half/Full Ownership、数据丢弃策略。
+- 功能 checkpoint：`d93665e`，在独立 `feature/m4-spsc-concurrency-verification` 分支；PR 合并结果待确认。
+
 ## KG-010：TIM7 ISR → Task、NVIC 约束与事件合并
 
 ### 来源
@@ -875,3 +885,46 @@ M4.5 基础链路已完成；在 M4 Final Integration 完成后继续深入，�
 ### 状态
 
 当前问题已解决；流程自动化和 CI 集成待后续阶段。
+
+
+## KG-012：Task ↔ Task SPSC 并发验证、原子内存序与测试隔离
+
+### 来源
+
+2026-10-27 Ring Buffer 的 C11 原子索引修正、两个独立 FreeRTOS Task 的 50,000 元素并发板级测试和 M4 分支管理实践。
+
+### 当前理解
+
+- Ring Buffer 有效容量是 7 个 `uint32_t` 数据元素（28 B），并不等于 7 字节。
+- 使用 `_Atomic` `head` / `tail` 与 acquire/release 发布/消费关系，区别于仅使用 `volatile` 或只依赖 32 位自然对齐访问。
+- 满载拒绝并重试不等于最终数据丢失；当前 `overflow_count` 衡量失败写入尝试次数。
+- 独立 Producer 和 Consumer Task 可在正常调度下同时运行，不能借逐项握手制造串行行为再宣称并发验证。
+- 测试开关默认 OFF；控制可选测试的 CMake Cache 需要显式核对。
+
+### 缺少什么
+
+- ISR ↔ Task Ring Buffer 数据传递及中断上下文同步约束。
+- 在更高生产速率/不同优先级下的端到端时延分布、覆盖/丢弃策略与误码/缺口告警。
+- DMA Half/Full 数据所有权、缓存区生命周期、面向 M5 的过载预算。
+
+### 为什么重要
+
+M5 将引入真实周期采样源；仅有 Task ↔ Task SPSC 的 PASS 不意味着 DMA 生产侧或 ISR 直接共享数据时自动安全。
+
+### 学习优先级
+
+M4 关闭前先完成独立分支合并、OFF 正式固件回归与复位测试；DMA Ownership 作为 M5 前置设计。
+
+### 学习任务
+
+- 保存 SPSC 的构建开关、正式测试日志及 Git checkpoint。
+- 检查不同生产/消费速率下的统计语义；对外明确累计失败尝试与真实业务样本丢失的区别。
+- 设计 M5 DMA 缓冲区生产/消费所有权图与队列通知方案。
+
+### 小实验
+
+已完成：50,000 次连续值 SPSC，`sent=recv=50000`、Full=7064、Empty=7419、Overflow=7064、7501 ticks，其他 M4 模块同时运行；分支 `d93665e` 已推送。NRST ×3、Power-cycle ×3 的 SPSC 版本专项证据；OFF 后正式固件回归；ISR/DMA 生产路径并发实验。
+
+### 状态
+
+**Task ↔ Task SPSC 专项 PASS**。其他并发模型尚未验证，M4 总里程碑尚未正式关闭。

@@ -1796,3 +1796,64 @@ MinHeap=4568 B
 ## 明天下一步
 
 审核导入后的 Markdown Diff，独立提交和推送文档；再开展 M4 最终联合稳定性与 NRST / Power-cycle 验收。
+
+
+# 2026-10-27
+
+## 今日计划
+
+- 在 M4 关闭前补足 Ring Buffer 真正的 Task ↔ Task SPSC 并发安全测试，并与现有 M4 模块联合运行。
+- 确认新增测试模块独立、可通过 CMake 开关关闭；保留已验证的通信基线。
+- 对并发测试结果、运行时资源和 Git checkpoint 形成可追溯记录。
+
+## 实际完成
+
+- 在干净工作区基础上创建 `feature/m4-spsc-concurrency-verification`，与原 `feature/m4-rtos-communication-baseline` 隔离。
+- 修改 `Inc/ring_buffer.h`、`Src/ring_buffer.c`：采用 `uint32_t` 元素、8 槽中保留 1 个空槽，并使用 C11 `_Atomic` 索引及 acquire/release 内存序构建 SPSC 发布/消费关系。当前测试模式限定单生产者和单消费者。
+- 新增 `Inc/m4_spsc_test.h`、`Src/m4_spsc_test.c`，使用独立的 SPSC Producer / Consumer 测试任务；通过根 `CMakeLists.txt` 中的 `M4_ENABLE_SPSC_TEST` 可选启用，不占用 Semaphore Task 的职责。
+- 在 `Src/freertos.c` USER CODE 区域接入测试模块和 SPSC 任务 Stack 监测；测试开关默认为 OFF（正式构建前仍应显式确认 CMake Cache 为 OFF）。
+- 实际板级日志：`[SPSC] PASS sent=50000 recv=50000 full=7064 empty=7419`；`[SPSC] overflow=7064 elapsedTicks=7501`。
+- 同一启动窗口中，Queue `seq=1..40` 连续、Semaphore Release / Acquire 连续、Mutex 共享数值正确、Task Flags 对应、TIM7 ISR 已展示至 `irq=70 received=70 errors=0`。
+- 资源采样：`Heap=3432 B`、`MinHeap=3432 B`、`SpscPFree=876 B`、`SpscCFree=444 B`、`ISRWorkerFree=520 B`。测试任务的存在没有在展示的 SYS 采样中引起 FreeRTOS 动态 Heap 下降。
+- 用户提供分支 Git 记录：`d93665e (HEAD, origin/feature/m4-spsc-concurrency-verification)`，功能提交 `feat: verify M4 ring buffer SPSC concurrency baseline`；用户确认工作区 clean。
+- 在先前的 M4 联合验证中，使用临时 `freertos.c` 先做 Ring Buffer EMPTY / FULL / WRAP 确定性测试，再进入 Semaphore 循环，用户确认长期运行通过；该临时实验不等于正式长期保留架构。
+
+## 验收情况
+
+- SPSC Task ↔ Task 50,000 个连续元素的生产、消费和顺序校验：**PASS**（专项测试程序汇总）。
+- 满缓冲重试 `7064` 次，与 `overflow_count=7064` 一致；空缓冲重试 `7419` 次。重试不代表最终丢样，测试成功接收数仍为 `50000`。
+- 测试区间的 Stack / Heap 监测和其他 M4 模块短时联合运行：**PASS（提供的日志窗口）**。
+- `git diff --check` 无输出（提交前由用户提供）；功能提交已推送到独立远程分支。
+- 单次测试耗时 `7501 ticks`，按本项目 1 kHz OS tick 配置约 7.501 s；不据此推导业务实时性/最坏延迟。
+
+## 未完成
+
+- 尚未得到本轮 SPSC 专项的 NRST ×3、完全断电上电 ×3 的单独证据。
+- 尚未得到明确的 SPSC OFF 后正式固件 Clean Build + 烧录回归结果；需验证 CMake Cache 不残留 `ON`。
+- 尚未确认 SPSC 分支已通过 PR 合并到 `feature/m4-rtos-communication-baseline`，也没有证据显示 M4 已合并到 `main`。
+- 最终 M4 里程碑关闭文档、合并后最终固件回归及 M5 起始分支仍待完成。
+
+## 今日 Bug
+
+- 本轮 SPSC 板级日志未报告新增固件 Bug；历史 Ring Buffer 文档误将有效 7 个 `uint32_t` 元素写成 7 B 的问题，已确定为旧资料口径错误，需以新决策补充，而不覆盖旧测试原文。
+
+## 今日学习
+
+- 分阶段 Thread Flags 交替读写验证的是基础功能；真正 SPSC 必须让生产者和消费者独立调度并验证顺序/完整性。
+- Full 时不覆盖已发布元素、重试同一数据，可以验证背压下的数据完整性；`overflow_count` 表达失败写入尝试次数，并不自动等于业务样本丢失数。
+- C11 acquire/release 约束已发布数据的内存可见性；只验证本次 Task ↔ Task SPSC，不推断 ISR ↔ Task、DMA Ownership 或 MPSC 安全。
+
+## 尚未理解
+
+- 高负载与不同优化条件下的最坏延迟、吞吐量上界、负载下积压预算；ISR/DMA 与任务间的数据所有权仍需另行设计。
+
+## Git
+
+- SPSC Branch：`feature/m4-spsc-concurrency-verification`。
+- SPSC HEAD / origin：`d93665e`，工作区由用户确认 clean。
+- 父级 M4 Branch：`feature/m4-rtos-communication-baseline`，已知 HEAD 为 `405b9ab`（`docs: record M4 ISR notification baseline verification`）。
+- 本 ZIP 的 2026-10-27 文档更新尚未在本地仓库执行 Git 提交；PR 合并与 M4 关闭均不可提前标记成功。
+
+## 明天下一步
+
+办理 M4 → main 合并与 M5 准备。

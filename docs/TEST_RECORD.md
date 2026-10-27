@@ -1801,3 +1801,150 @@ TIM7 update IRQ
   - 高负载条件下同一 Thread Flag bit 合并量化。
 
 - 功能 checkpoint：`adf5d5e`。
+
+
+## TEST-20261027-01：M4 Ring Buffer 基础测试与通信模块同机联合验证
+
+- 目标：
+  - 验证此前独立通过的 Ring Buffer Empty/Full/Wrap-around/FIFO 基础测试能与 M4 Queue、Thread Flags、Semaphore、Mutex 和 TIM7 ISR → Task 链路在同一固件中运行。
+  - 检查临时集成模式下 Ring Buffer 阶段测试完成后，原 Semaphore Task 能继续稳定工作。
+
+- 测试环境：
+  - STM32F407VGT6；FreeRTOS + CMSIS-RTOS2；USART2 调试日志。
+  - 本轮采用**临时修改的 `Src/freertos.c`**：在 Semaphore Producer/Consumer Task 入口先执行 Ring Buffer 分阶段测试，通过后分别进入原 `SyncSem` Release/Acquire 无限循环。
+  - 此临时结构仅用于联合验证，**不是建议长期保留的正式任务职责划分**；不将其等同于下一个测试中的无阶段同步 SPSC。
+
+- 执行与真实日志（节选）：
+
+```text
+[I][M4ISR] TIM7 started
+[I][RBTEST] EMPTY PASS
+[I][RBTEST] FULL PASS, overflow=1
+[I][RBTEST] FULL READ PASS
+[I][RBTEST] WRAP WRITE PASS, head=1 tail=2
+[I][RBTEST] WRAP READ PASS, head=1 tail=1
+[I][RBTEST] Consumer test finished
+[I][SEM] Consumer Waiting
+[I][RBTEST] Producer test finished
+[I][SYS] Producer Released
+[I][SEM] Consumer Acquired
+[I][M4ISR] irq=120 received=120 errors=0
+[I][M4Q] rx seq=65 value=650 tick=12801 count=0
+```
+
+- 模块回归：
+  - Ring Buffer：Empty、Full、Full Read、Wrap Write、Wrap Read 五项 PASS；Full 后 `overflow_count=1`，Final head/tail 均为 1。
+  - Semaphore：进入永久 Release / Acquire 循环后保持正常。
+  - Queue：提供的窗口中 `seq=1..65` 连续，`value=seq×10`，`count=0`。
+  - Task Flags：`set event` 和 `event received` 对应；输出先后顺序可能受调度和日志机制影响，不以串口行序证明真实调度因果顺序。
+  - Mutex：共享值 `0 -> 1 -> 11 -> ...`，至 `seq=16` 可见 `value=88`，每次 A:+1、B:+10。
+  - TIM7：至 `irq=120 received=120 errors=0`，该统计窗口没有观察到通知错误。
+
+- 连续 SYS 采样：
+
+```text
+HeartFree=384 B    UARTFree=480 B
+M4ProdFree=808 B   M4ConsFree=496 B
+M4EvtFree=528 B    M4WorkFree=528 B
+SemProFree=248 B   SemConFree=256 B
+MutexAFree=520 B  MutexBFree=520 B
+ISRWorkerFree=520 B
+Heap=3432 B        MinHeap=3432 B
+```
+
+- 测试结论：
+  - **PASS：** Ring Buffer 基础自检与其他已完成的 M4 任务在同一运行中正常执行，用户明确确认长期运行测试通过。
+  - 日志展示至 12.8 秒左右的计数窗口，但用户未附长期运行终点的准确分钟数/最终日志；不凭此窗口计算长期验收时长。
+  - 此处不证明两个任务无阶段同步地同时读写 Ring Buffer；真正并发测试证据见 `TEST-20261027-02`。
+  - 不替代最终正式固件（取消临时测试入口）的回归、NRST ×3 或 Power-cycle ×3。
+
+## TEST-20261027-02：M4 Ring Buffer Task ↔ Task SPSC 50,000 元素并发专项验证
+
+- 目标：
+  - 补齐 M4 关闭前 Ring Buffer 真正 **Single Producer / Single Consumer** 并发数据传输验证。
+  - 在不使用逐元素 Thread Flags/Mutex 串行握手的情况下，验证 FIFO 严格顺序、数据完整性、满载重试、空缓冲重试和环形索引回绕。
+  - 检查新增并发测试对原 M4 模块、FreeRTOS Stack 和 Heap 的影响。
+
+- 测试环境与实现：
+  - STM32F407VGT6 + FreeRTOS/CMSIS-RTOS2，`feature/m4-spsc-concurrency-verification`。
+  - 修改 `Inc/ring_buffer.h`、`Src/ring_buffer.c` 使用 C11 `_Atomic` `head/tail` 索引和 acquire/release 读写；`buffer[8]` 的元素类型为 `uint32_t`，有效容量 7 元素（28 B）。
+  - 新增 `Inc/m4_spsc_test.h`、`Src/m4_spsc_test.c` 两个独立 SPSC Task；CMake 构建开关 `M4_ENABLE_SPSC_TEST` 默认 OFF，本轮压力测试明确以测试固件启用该功能。
+  - Producer 连续发送递增序号 1..50000；Consumer 逐项验证；Full 时重试**当前同一元素**，不覆盖缓冲区中的有效数据；无数据可读时 Empty 重试。
+  - Heap 仍为 3432 B，与 SPSC 任务采用静态分配设计相符；该采样本身不能替代源码级动态/静态分配审查。
+
+- 真实启动和最终日志：
+
+```text
+[I][M4ISR] TIM7 started
+[I][SPSC] START total=50000 capacity=7 elements
+[I][SPSC] PASS sent=50000 recv=50000 full=7064 empty=7419
+[I][SPSC] overflow=7064 elapsedTicks=7501
+```
+
+- 并发专项统计：
+
+| 指标 | 实测值 | 判读 |
+| --- | ---: | --- |
+| 成功发送元素数 | 50000 | 全部递增元素发送成功 |
+| 成功接收元素数 | 50000 | 与发送数一致，程序序列校验 PASS |
+| Full 写入拒绝/重试次数 | 7064 | 正常背压，测试选择重试而非丢样 |
+| Empty 读取重试次数 | 7419 | Consumer 实际遇到空缓冲 |
+| `overflow_count` | 7064 | 与失败写入尝试次数一致 |
+| 耗时 | 7501 OS ticks | 本项目 1 kHz Tick 下约 7.501 s；非硬实时性能保证 |
+| 目标环容量 | 7 × `uint32_t` | 物理 8 槽，空出一槽 |
+
+- 关键判断：`full=7064` 不是“最终丢失 7064 个数据”，因为 Producer 保留被拒绝的当前值并在可用时重试；`sent=recv=50000` 且有 PASS 序列校验结果。若改成不重试/覆盖策略，需另外定义真实业务丢样统计。
+
+- 与其他 M4 任务共同运行的串口观察（截取）：
+
+```text
+[I][M4Q] rx seq=1 value=10 tick=1 count=0
+[I][M4ISR] irq=10 received=10 errors=0
+[I][M4F] set event, count=1 flags=0x00000001
+[I][M4F] event received, count=1 flags=0x00000001
+[I][M4M] seq=1 A value=0->1
+[I][M4M] seq=2 B value=1->11
+[I][M4ISR] irq=70 received=70 errors=0
+[I][M4Q] rx seq=40 value=400 tick=7802 count=0
+[I][SYS] Producer Released
+[I][SEM] Consumer Acquired
+```
+
+- SYS 运行时观测（测试前后所展示的连续采样值一致）：
+
+```text
+[I][SYS] HeartFree=384 B UARTFree=480 B M4ProdFree=808 B M4ConsFree=496 B
+[I][SYS] M4EvtFree=528 B M4WorkFree=528 B Heap=3432 B MinHeap=3432 B
+[I][SYS] SemProFree=288 B SemConFree=288 B MutexAFree=520 B MutexBFree=520 B
+[I][SYS] ISRWorkerFree=520 B
+[I][SYS] SpscPFree=876 B SpscCFree=444 B
+```
+
+- Git 记录：
+  - 用户开始测试前从干净工作区创建 `feature/m4-spsc-concurrency-verification` 分支。
+  - 修改 4 个已跟踪文件 `CMakeLists.txt`、`Inc/ring_buffer.h`、`Src/ring_buffer.c`、`Src/freertos.c`，新增 2 个测试文件；`git diff --check` 无输出。
+  - 2026-10-27 用户确认 `d93665e (HEAD, origin/feature/m4-spsc-concurrency-verification)`，提交说明 `feat: verify M4 ring buffer SPSC concurrency baseline`，工作区 clean。
+  - 父 M4 分支最新已知 `405b9ab`（M4.5 文档 checkpoint）；尚未收到 SPSC → M4 PR 已合并的结果。
+
+- 验收：
+  - Task ↔ Task SPSC 50,000 元素顺序与完整性：**PASS（一次可见板级运行）**。
+  - Full / Empty 负载场景与 Overflow 计数一致性：**PASS**。
+  - 同机 M4 Queue、Semaphore、Mutex、Thread Flags、TIM7 ISR 在可见观察窗口运行正常：**PASS（该窗口）**。
+  - 资源采样：Heap / MinHeap 稳定，SPSC P/C Stack 均有剩余；不能据此保证全部未来异常路径安全。
+
+- 未覆盖：
+  - 该记录未提供 SPSC 专项 NRST ×3 和 Power-cycle ×3 的三次逐次结果。
+  - 该记录未提供 SPSC 测试 OFF 时正式固件的独立 clean build/烧录回归证据。
+  - 该记录不证明 ISR ↔ Task 数据流、DMA Buffer Ownership、MPSC/MPMC、极限高频吞吐或最坏端到端延迟。
+  - `7501 ticks` 是本次单次传输耗时，不能据此宣称长期稳定性测试耗时就是 7.5 秒。
+
+## TEST-20261027-03：M4 最终正式固件关闭检查
+
+- 目标：确认 SPSC 专项固件和最终正式固件不会混淆，并为 M4 → main 合并建立可复现退出条件。
+- 前置：`d93665e` 已提交并推送独立 SPSC 分支；M4 父分支最近已知为 `405b9ab`，没有收到合并成功的用户反馈。
+- 步骤：
+  1. 如尚未执行，在 `M4_ENABLE_SPSC_TEST=ON` 下 NRST ×3 / 完全断电上电 ×3，每次确认 SPSC PASS 和核心任务正常。
+  2. 显式配置 `cmake --preset Debug -DM4_ENABLE_SPSC_TEST=OFF` 并 `cmake --build --preset Debug --clean-first`。
+  3. 烧录正式固件，确保不出现 `[SPSC] START`，Queue/Flags/Semaphore/Mutex/TIM7 ISR 正常，记录新的 Stack / Heap。
+  4. 审查 SPSC 分支的六个文件并经 PR 合入 M4；更新本地 M4 分支，再 clean build / 板级回归。
+  5. 整理文档与 Git checkpoint，待 M4 关闭验收确实完成后再通过 PR 合入 main。
