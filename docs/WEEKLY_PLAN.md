@@ -1,78 +1,57 @@
-# 周计划：2026-W39
+# 周计划：2026-W44
 
 > 唯一回答：这周准备干什么？
-> 周期：2026-09-21 至 2026-09-27。每周更新一次。
+> 周期：2026-10-26 至 2026-11-01。每周更新一次。
+> 状态校准：2026-10-27；只将实际板级/提交证据标记完成，PR 与复位验收未确认前不写为完成。
 
 ## Current Milestone
 
-M2：FreeRTOS 最小系统与调度基础，完成收尾。
+M4：RTOS 通信、同步和数据缓冲，当前进入最终合并/关闭准备，**尚未正式关闭**。M0～M3 已完成。
 
-M3：线程安全、可裁剪的调试基础设施，准备开始。
+M4.1 Queue、M4.2 Task Flags、M4.3 Semaphore/Mutex、M4.4 Ring Buffer 基础功能、M4.5 TIM7 ISR → Task 均有板级基线；2026-10-27 新增 **Task ↔ Task SPSC 并发 50,000 元素 PASS**，功能 checkpoint `d93665e` 在独立分支。
+
+本周不进入 M5 ADC + Timer + DMA 业务实现，先完成当前 SPSC 分支合并和正式 M4 基线验收。
 
 ## 本周核心目标
 
-完成 M2 剩余的调度、运行时资源与稳定性验证，形成经过真实硬件验证的 FreeRTOS Final Baseline；完成文档和 Git 收尾后进入 M3。
+- 以最新 SPSC 并发测试补齐 Ring Buffer 在 M4 关闭前的指定验证缺口。
+- 记录 Full/Empty 背压、连续数据序号、C11 原子索引、Stack/Heap 与现有模块联合运行证据。
+- 确认 `M4_ENABLE_SPSC_TEST=OFF` 的正式固件可重新 clean build 与烧录运行。
+- 在证据齐全后通过 PR 将 SPSC 并入 M4，完成文档和最终回归，再决定是否关闭 M4。
 
 ## 本周任务
 
-验证不同优先级任务之间的抢占行为。
-
-测量 HeartbeatTask/UARTTask 的实际 Stack High Water Mark。
-
-测量 FreeRTOS Current Free Heap 和 Minimum Ever Free Heap。
-
-验证两个同优先级、持续 Ready Task 的时间片调度行为。
-
-将实验 Busy Task 恢复为正常周期任务 baseline。
-
-完成 M2 Final Baseline NRST 和完全断电重新上电稳定性验证。
-
-清理 M2 Git 提交边界并建立最终功能 checkpoint。
-
-同步 TEST_RECORD、PROJECT_STATUS、DAILY_LOG、KNOWLEDGE_GAPS、ROADMAP、README 和 SESSION_HANDOFF。
-
-创建 M2 文档关闭 checkpoint 并推送远程。
-
-如果 M2 完整关闭且本周仍有开发时间，只开始 M3 最小日志基础设计，不进入正式业务模块。
+1. 已完成：基于干净仓库创建独立 `feature/m4-spsc-concurrency-verification` 分支。
+2. 已完成：`ring_buffer.h/.c` 的 C11 `_Atomic` head/tail 和 acquire/release SPSC 内存序调整，元素为 `uint32_t`，有效容量 7 个元素。
+3. 已完成：新增两独立 SPSC Task 以及 `M4_ENABLE_SPSC_TEST` 可选 CMake 开关（默认 OFF），保持 Semaphore Task 职责分离。
+4. 已完成：板级 `PASS sent=50000 recv=50000 full=7064 empty=7419`、`overflow=7064 elapsedTicks=7501`。
+5. 已完成：同窗口验证 M4Q、M4F、Semaphore、Mutex、TIM7 ISR 正常，采样 Heap/MinHeap 3432 B、SPSC P/C Stack 剩余 876/444 B。
+6. 已完成：功能独立提交 `d93665e` 并推送 origin；用户确认工作区干净。
+7. 待提供证据：SPSC 版本 NRST ×3、Power-cycle ×3 与 SPSC PASS 后的其他模块持续运行终点记录。
+8. 待提供证据：显式 `M4_ENABLE_SPSC_TEST=OFF` 后 clean build、烧录、无 `[SPSC] START` 的正式回归。
+9. 待完成：SPSC → M4 Pull Request 审查、合并、更新本地 M4 分支与合并后板级检查。
+10. 进行中：九份 Markdown 的 M4 Final Integration / SPSC 记录更新；导入仓库后核对 Diff 和提交独立 docs checkpoint。
+11. 待完成：确认 M4 最终验收边界及 PR M4 → main；通过后再计划 M5 分支。
 
 ## 验收标准
 
-不同优先级抢占实验通过。
-
-同优先级时间片调度实验通过。
-
-HeartBeatTask 与 UARTTask Stack 余量具有真实运行时测量数据。
-
-FreeRTOS Heap 当前与历史最低剩余量具有真实运行时测量数据。
-
-M2 Final Baseline 使用正常周期任务结构，不保留 CPU 满载 Busy Task 实验代码。
-
-M2 Final Baseline NRST ×3 通过。
-
-M2 Final Baseline完全断电重新上电 ×3 通过。
-
-最终功能代码形成独立 Git checkpoint。
-
-文档与真实代码、测试和 Git 状态一致。
-
-feature/m2-freertos-baseline 最终同步到远程且工作区 clean。
-
-ROADMAP 中 M2 标记为完成，M3 标记为当前。
+- Task ↔ Task SPSC 实际发送/接收同为 50,000，且顺序无错、Full 和 Empty 被实测触发；Full 重试不误写为最终数据丢失。
+- `SpscPFree=876 B`、`SpscCFree=444 B` 和 Heap 3432 B 来自板级采样，不将静态 RAM 与 FreeRTOS Heap 混淆。
+- SPSC 只以一个 Producer 写 head、一个 Consumer 写 tail；不能推广到 ISR ↔ Task / DMA / MPSC。
+- 原 M4 Queue、Flags、Semaphore、Mutex、TIM7 ISR 运行不受本轮测试影响（以日志窗口为准）。
+- 正式固件显式关闭 SPSC 测试后重新生成、烧录并通过回归，缓存选项不残留 ON。
+- 最终复位/上电重启和合并后验收均有独立记录，Git HEAD / Branch 与文档当前状态一致。
+- 未完成的 PR、NRST 和 Power-cycle 不得写成已完成。
 
 ## 风险
 
-调度实验代码不能长期残留在 Final Baseline 中。
+- 临时测试与正式固件配置不同；构建 Cache 保留 `ON` 会导致测试任务意外存在。
+- SPSC 当前 Consumer 剩余 Stack 444 B，Semaphore 任务剩余 Stack 288 B，M5 增加业务前必须重新测量。
+- `overflow_count` 当前统计失败写入尝试，并非业务丢样计数；需要另设真实丢样指标。
+- C11 原子 SPSC 只覆盖一个 Producer/一个 Consumer，ISR/DMA 生产侧不可直接照搬结论。
+- CubeMX 再生成易引入 CRLF/LF 噪音，保留备份和定向处理流程。
+- 单次 `7501 ticks` 的测试不代替长期满载、复位与工业级最坏延迟验收。
 
-Stack/Heap 的当前测量值只适用于当前执行路径，新增功能后必须重新测量。
+## 可选
 
-osThreadGetStackSpace() 反映历史最小剩余 Stack，不能简单理解为瞬时空闲 Stack。
-
-多任务直接调用同一个 UART 输出接口在后续会产生共享资源竞争问题，M3 必须建立线程安全日志策略。
-
-CubeMX 或 Windows 编辑器可能重新保存大量文件并改变 CRLF/LF；提交前必须区分真实代码差异与 EOL-only 噪音。
-
-M2 完成后不能为了赶进度直接跳到 ADC、DMA、RS485 或 Modbus，应先补齐调试和并发基础设施。
-
-## 可选任务
-
-完成 M2 后，为 M3 设计一个最小日志接口草案，包括日志等级、统一入口和线程安全目标，但暂不进行大规模重构。
+M4 经验证合并后再准备 M5 ADC/Timer/DMA 资源冲突清单、Half/Full 数据所有权图和吞吐预算；不提前实现 M5 业务逻辑。

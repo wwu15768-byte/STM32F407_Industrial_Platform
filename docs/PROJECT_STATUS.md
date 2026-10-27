@@ -3,17 +3,41 @@
 > 唯一回答：项目现在在哪？
 > 更新时机：项目状态发生明显变化时。
 
-更新时间：2026-09-27
+更新时间：2026-10-27
 
 ## Current Milestone
 
-M3：线程安全、可裁剪的调试基础设施，功能实现和真实 STM32F407VGT6 板级验证已完成。当前正在进行 M3 最终文档和 Git 收尾；完成 PR 合并后再进入 M4：数据缓冲与任务间通信。
+M4：RTOS 通信、同步和数据缓冲（**功能验证基本完成；独立 SPSC 分支已提交并推送，里程碑尚未正式关闭**）。M0～M3 已完成。
+
+- M4.1 Queue：完成。
+- M4.2 CMSIS-RTOS2 Thread Flags Task → Task：完成，含重复 Flag 合并验证。
+- M4.3 Binary Semaphore / Mutex：完成基础与联合回归。
+- M4.4 Ring Buffer：Empty / Full / FIFO / Wrap-around 基础功能 PASS；2026-10-27 **Task ↔ Task SPSC 50,000 元素并发专项 PASS**。
+- M4.5 TIM7 ISR → Worker：100 ms / 10 Hz 通知链路及持续运行基线 PASS。
+- M4 Final Integration：临时同机多模块联测及用户确认的长期运行已通过；SPSC 专项在独立分支通过。尚需 SPSC OFF 正式固件回归、M4 最终 NRST ×3 / Power-cycle ×3 的证据、PR 合并和文档关闭。
+- M5 ADC + Timer + DMA：未开始。
 
 ## Current Goal
 
-完成 M3 最终文档和 Git 收尾，将已经通过统一 UART 日志、DEBUG/INFO/WARN/ERROR 等级过滤、全局编译期裁剪、多任务 Mutex 并发压力、Task Stack、FreeRTOS Heap、NRST 和完全断电重新上电验证的调试基础设施固化并合并到 main。M3 完整关闭后再进入 M4，开始 Queue、Task Notification、Ring Buffer、数据所有权和生产者/消费者模型。
+完成 SPSC 专项分支并入 M4、最终正式固件验收及 M4 里程碑关闭，不重复已完成的 M4.1～M4.5 基础功能。
+
+已验证的 SPSC 独立运行数据链路：
+
+```text
+SpscProducerTask (uint32_t 1..50000)
+  -> Ring Buffer [8 个 uint32_t，预留 1 槽；有效 7 元素]
+  -> SpscConsumerTask (校验连续、无重号跳号)
+```
+
+- `head/tail` 使用 C11 `_Atomic` 与 acquire/release 内存序；仅有一个 Producer 修改 head、一个 Consumer 修改 tail。
+- Full 时拒绝写入并重试同一元素，Full 尝试 `7064` 次；Empty 读取重试 `7419` 次；最终 `50000` 发 / `50000` 收，`overflow_count=7064`。
+- Worker Stack 采样：SPSC Producer `876 B`，Consumer `444 B`，ISR Worker `520 B`；Heap / MinHeap `3432 B`。
+- 本次测试只证明 Task ↔ Task SPSC；不能推广为 ISR ↔ Task 或 DMA Buffer Ownership 正确。
+- 分支：`feature/m4-spsc-concurrency-verification`，已知 HEAD/远程 `d93665e`；父级 M4 分支已知为 `405b9ab`，**没有收到 PR 已合并的确认**。
 
 ## Completed
+
+> 以下为按时间积累的历史完成事项，其中早期出现的“当前”只表示当时的基线；最新状态以本文件上方的 Current Milestone / 下方的 Last Verified Function 为准。
 
 - 确认仓库根目录为 `STM32F407_Industrial_Platform`。
 - 验证 STM32CubeMX、STM32CubeCLT、CMake、Ninja、GNU Arm Toolchain、CubeProgrammer CLI、ST-LINK GDB Server 和 Git。
@@ -99,7 +123,7 @@ M3：线程安全、可裁剪的调试基础设施，功能实现和真实 STM32
 - 日志模块当前使用 128 B 静态共享 buffer。
 - 已使用 CMSIS-RTOS2 Mutex 保护共享日志 buffer 和 USART2 阻塞发送完整事务。
 - FreeRTOS UARTTask 原有直接 HAL_UART_Transmit() 和 snprintf() 日志路径已经迁移到统一 LOG_INFO()。
-- 已形成并推送 `6a760d3：feat: establish debug logging infrastructure`。s
+- 已形成并推送 `6a760d3：feat: establish debug logging infrastructure`。
 - 已形成并推送 `4701c62：feat: route FreeRTOS runtime output through debug logger`。
 - 已完成 DEBUG_LOG_ENABLE = 1 / 0 clean build 对比。
 - 完整日志开启时构建结果为 FLASH 27424 B、RAM 21056 B。
@@ -116,57 +140,226 @@ M3：线程安全、可裁剪的调试基础设施，功能实现和真实 STM32
 - 六次重新启动后均能恢复正常日志、Heartbeat 和运行时资源观测。
 - 未观察到 HardFault、Hang、日志异常停止或 Heap 持续下降。
 - 当前 M3 已达到可构建、可烧录、可运行、可观测、可裁剪、可重复启动并具有共享 UART 日志互斥保护的稳定状态。
+- 已形成并推送 M3 文档关闭 checkpoint `75523b6：docs: close M3 and prepare M4 handoff`。
+- 项目路线已扩展为 M0～M15：M10 新增 CAN，M11 新增 Bootloader / IAP，M12 新增 Watchdog / Reset Cause / Fault Diagnostics，原 M10～M12 顺延为 M13～M15。
+- M3 已通过 PR 合并到 `main`，Merge Commit 为 `c13b8e5`。
+- 已从最新 M3 稳定 `main` 建立 `feature/m4-rtos-communication-baseline`。
+- 已形成并推送 `ed6c3a7：docs: update roadmap for expanded project milestones`。
+- 已建立独立 M4 IPC 模块：
+  - `Inc/m4_ipc.h`
+  - `Src/m4_ipc.c`
+- `Src/freertos.c` 当前仅调用 `M4Ipc_Init()` 启动 M4 IPC 模块，Queue、Task Handle 和具体通信逻辑保持在 `m4_ipc.c` 内部。
+- M4 用户源码通过根目录 `CMakeLists.txt` 加入构建，没有修改 CubeMX 生成的 `cmake/stm32cubemx/CMakeLists.txt`。
+- 已建立 `M4QueueMessage_t`，当前包含 `sequence`、`value` 和 `tick` 三个 `uint32_t` 字段，消息大小为 12 B。
+- 已建立长度为 8 的 `M4DataQueue`。
+- 已建立 `M4ProducerTask` 和 `M4ConsumerTask`。
+- 当前 Queue Final Baseline：
+  - Producer Period：200 ms。
+  - Producer Priority：`osPriorityNormal`。
+  - Producer Stack：1024 B。
+  - Consumer Priority：`osPriorityNormal`。
+  - Consumer Stack：1024 B。
+  - Queue Put Timeout：0。
+  - Consumer Queue Get Timeout：`osWaitForever`。
+- 已通过真实 STM32F407VGT6 验证结构体按值进入 Queue，Producer 后续修改自己的局部对象不会修改已经入队的数据副本。
+- 正常路径下已连续观察到 `seq=1,2,3...`，`value = sequence × 10`，Tick 基本每 200 tick 增加一次。
+- 正常路径下 Queue Get 后 Count 持续为 0，未观察到 Queue Full 或 Sequence Gap。
+- 已完成 Queue Full / Backpressure 人工压力实验：
+  - Producer 临时调整为约 50 ms。
+  - Consumer 临时增加约 500 ms 处理延迟。
+  - Queue Count 实际达到 8。
+  - `osMessageQueuePut()` 在 Queue Full 且 timeout = 0 时立即失败。
+  - Drop Counter 持续增加。
+  - Consumer 在旧 Queue 库存消耗后能够检测到 Sequence Gap。
+- 已验证 Queue Full 不会破坏此前已经成功入队的消息，只会使新的 Put 失败。
+- 已验证固定长度 Queue 只能吸收短时间突发，不能解决长期 Producer Throughput 高于 Consumer Throughput 的问题。
+- 压力测试中发现 M4ProducerTask 初始 512 B Stack 历史最小剩余降至 0 B。
+- 已确认 Queue Full 后的格式化日志路径会显著增加 Producer 历史峰值 Stack 使用。
+- M4ProducerTask Stack 已从 512 B 调整为 1024 B。
+- 调整后以相同压力路径重新验证：
+  - HeartBeatTask 历史最小剩余 Stack：384 B。
+  - UARTTask 历史最小剩余 Stack：496 B。
+  - M4ProducerTask 历史最小剩余 Stack：512 B。
+  - M4ConsumerTask 历史最小剩余 Stack：496 B。
+  - FreeRTOS Current Free Heap：11048 B。
+  - FreeRTOS Minimum Ever Free Heap：11048 B。
+- Producer Stack 增加 512 B 后 FreeRTOS Free Heap 同样减少 512 B，运行时资源变化与配置一致。
+- 压力实验结束后已经恢复 200 ms Producer 和无人工 Consumer Delay 的正常 baseline。
+- 恢复后的 M4.1 Final Baseline 已通过稳定性验证。
+- 未观察到 Queue Full、Sequence Gap、Heap 持续下降、Hang 或 HardFault。
+- M3 HeartBeatTask、UARTTask 和 Debug Logger 在 M4.1 实验期间持续正常运行。
+- 已形成并推送 `b78282c：feat: establish RTOS queue communication baseline`。
+- 已建立 M4.2 Task → Task CMSIS-RTOS2 Thread Flags 通知链路。
+- 已建立 `M4EventTask` 和 `M4WorkTask`。
+- 已定义 `M4_EVENT_WORK_READY` 单一事件位。
+- M4EventTask Final Baseline：
+  - Priority：`osPriorityNormal`。
+  - Stack：1024 B。
+  - Period：1000 ms。
+- M4WorkTask Final Baseline：
+  - Priority：`osPriorityNormal`。
+  - Stack：1024 B。
+  - 使用 `osThreadFlagsWait(..., osFlagsWaitAny, osWaitForever)` 阻塞等待。
+- 已验证 Work 在没有事件时阻塞，在 Event Producer Set Flag 后正常被唤醒。
+- 正常路径已验证 11 Sets → 11 Receives。
+- 原 M4 Queue 在 Thread Flags 实验期间继续保持 Sequence 连续和正常消费。
+- 已完成人工重复同一 Flag bit 的事件合并实验。
+- Burst 实验中临时提高 Event Producer Priority，并在 Work 运行前连续 Set 相同 Flag 3 次。
+- 实际观察到 33 Sets → 11 Receives。
+- 已确认相同 Thread Flag bit 的重复 Set 表达 Pending State，不保存独立事件次数。
+- 已确认 Thread Flags 不能作为无损事件计数器使用。
+- 已明确当前职责边界：
+  - Queue：结构化数据传递和有限消息缓冲。
+  - Thread Flags：轻量事件状态通知。
+- Burst 压力路径中 M4EventTask 历史最小剩余 Stack 为 520 B。
+- Final Baseline 中：
+  - HeartBeatTask 历史最小剩余 Stack：384 B。
+  - UARTTask 历史最小剩余 Stack：504 B。
+  - M4ProducerTask 历史最小剩余 Stack：808 B。
+  - M4ConsumerTask 历史最小剩余 Stack：496 B。
+  - M4EventTask 历史最小剩余 Stack：528 B。
+  - M4WorkTask 历史最小剩余 Stack：528 B。
+  - FreeRTOS Current Free Heap：8776 B。
+  - FreeRTOS Minimum Ever Free Heap：8776 B。
+- M4.2 Final Baseline 已完成 NRST ×3。
+- M4.2 Final Baseline 已完成完全断电重新上电 ×3。
+- 六次重新启动后 Queue、Thread Flags、Heartbeat、UART、Stack 和 Heap 均能够稳定恢复。
+- 未观察到 HardFault、Hang 或 Heap 持续下降。
+- M4.2 最新功能 checkpoint：`<fd80cc9>`，`feat: establish RTOS thread flag notification baseline`。
+- 已完成 M4 Binary Semaphore Task → Task 同步实验。
+- 已建立 `SyncSem`：
+  - Maximum Count：1。
+  - Initial Count：0 / Depleted。
+- 已建立 `SemProducerTask` 和 `SemConsumerTask`。
+- Consumer 使用 `osSemaphoreAcquire(..., osWaitForever)` 阻塞等待。
+- Producer 每约 2000 ms Release Semaphore。
+- 已验证 Producer Release 后 Consumer 能够稳定被唤醒，并在 Acquire 后重新进入 Waiting。
+- 已形成并推送 `435ba4f：feat: establish RTOS semaphore synchronization baseline`。
+- 已将 `debug_log.c` 从 CubeMX 生成 CMake source list 的依赖中移出，由根目录 `CMakeLists.txt` 显式维护。
+- 已形成并推送 `34ddce3：build: keep debug logger outside CubeMX generated sources`。
+- 已建立 `SharedDataMutex`。
+- 已建立 `MutexTaskA` 和 `MutexTaskB`。
+- 已使用 `shared_value` 验证两个 Task 的共享数据 Read-Modify-Write 互斥访问。
+- 已增加 `shared_op_seq` 区分真实临界区执行顺序和 UART 日志打印顺序。
+- 已验证按 `shared_op_seq` 检查时共享数据更新连续，无旧值覆盖。
+- 已形成并推送 `c5bc54a：feat: establish RTOS mutex protection baseline`。
+- Queue、Thread Flags、Binary Semaphore、Mutex 已完成联合长期运行验证。
+- 初始同步 Task Stack 测量发现：
+  - SemProducerTask 最小剩余：32 B。
+  - SemConsumerTask 最小剩余：32 B。
+  - MutexTaskA 最小剩余：8 B。
+  - MutexTaskB 最小剩余：8 B。
+- 已根据真实 High Water Mark 调整 Stack：
+  - Semaphore Task：约 512 B → 768 B。
+  - Mutex Task：约 512 B → 1024 B。
+- 调整后长期运行：
+  - SemProducerTask 最小剩余：288 B。
+  - SemConsumerTask 最小剩余：288 B。
+  - MutexTaskA 最小剩余：488 B。
+  - MutexTaskB 最小剩余：520 B。
+  - FreeRTOS Current Free Heap：4568 B。
+  - FreeRTOS Minimum Ever Free Heap：4568 B。
+- Stack 总增量约 1536 B，Free Heap 同样减少约 1536 B，资源变化符合预期。
+- M4.3 阶段历史构建（不代表最新 M4.5）：
+  - RAM：21112 B / 128 KB，16.11%。
+  - FLASH：33724 B / 1 MB，3.22%。
+- 已形成并推送 `c84fed8：fix: increase M4 synchronization task stack margins`。
+- 当前未观察到 HardFault、Hang、Heap 持续下降、Queue Sequence Gap、Semaphore 死锁或 Mutex 数据覆盖。
+- 已建立独立 M4 Ring Buffer 模块：
+  - `Inc/ring_buffer.h`
+  - `Src/ring_buffer.c`
+- 已通过根目录 `CMakeLists.txt` 加入 Ring Buffer 构建。
+- 旧版测试文档将 Ring Buffer 记为固定 8 B 数组、有效容量 7 B；后续发现与已上传源码快照的 `uint32_t buffer[8]` 不一致，需依据最新头文件核对元素宽度与字节数。
+- 已实现 RingBuffer_Init / WriteByte / ReadByte / IsEmpty / IsFull。
+- 使用 head / tail 索引及预留一个空槽区分 Empty 和 Full。
+- Full 时拒绝新数据写入，并通过 `overflow_count` 记录拒绝次数。
+- 已完成 Empty / Full / Full Read / Wrap Write / Wrap Read 确定性板级测试。
+- 五个测试阶段全部 PASS。
+- 已验证 Write Index 和 Read Index 循环回绕。
+- 已验证 FIFO 数据顺序与空读输出变量保护。
+- 实测溢出计数为 1。
+- 最终读写索引为 head=1、tail=1。
+- 已观察到 Queue、Thread Flags、Mutex 和 UART 在同一测试固件中持续输出。
+- 本轮 FreeRTOS Heap=4568 B、MinHeap=4568 B。
+- 2026-10-16 Ring Buffer 测试固件曾临时复用 SemProducerTask / SemConsumerTask；该临时状态已在后续 Semaphore 恢复中结束。
+- 2026-10-16 的 Ring Buffer 测试本身未覆盖 Semaphore 回归；后续已单独通过。
+- 已形成功能 checkpoint：
+  - `f8c3e52`：`feat: establish M4 ring buffer baseline`。
+- `f8c3e52` 已成功推送至远程 M4 功能分支。
+- M4.4 Ring Buffer 基础功能已完成，ISR / Task 并发安全仍未验收。
+- Semaphore 已由 Ring Buffer 临时测试入口恢复并完成真实板级功能回归，形成并推送 `c4c0721`。
+- 已使用 TIM7 完成 M4.5 实际 IRQ → `osThreadFlagsSet()` → Worker 阻塞唤醒链路。
+- 已在 TIM7 优先级 5、FreeRTOS 阈值 5、4 位抢占优先级分组条件下完成 ISR-safe API 约束核对。
+- 已观察 `irq=30/40/50/60` 对应 `received=30/40/50/60`、`errors=0`。
+- 与 M4ISR 并行运行时原 Queue、Semaphore、Mutex、Task Flags 和 UART 继续正常输出。
+- 新增 ISR Worker 后测得 Stack 历史最小剩余 520 B，Heap/MinHeap 3432 B；用户确认后续持续运行测试通过。
+- M4.5 独立功能 checkpoint：`adf5d5e`，已推送远程；用户确认本地分支 clean。
+
+- 2026-10-27：M4 最终临时集成运行中，Ring Buffer 确定性测试 EMPTY/FULL/FULL READ/WRAP WRITE/WRAP READ 全部 PASS，之后原 Semaphore 与 Queue / M4F / Mutex / TIM7 ISR 继续并行运行；用户确认长期运行通过（准确时长及最终末尾计数未给出）。
+- 2026-10-27：独立 SPSC 测试两 Task 共传输 50,000 个递增 `uint32_t`，最终 `PASS sent=50000 recv=50000 full=7064 empty=7419`、`overflow=7064 elapsedTicks=7501`；不是历史分阶段握手实验。
+- SPSC 压力运行期间 Queue `seq=1..40` 连续，TIM7 ISR 可见至 `irq=70 received=70 errors=0`，Semaphore / Mutex / M4F 正常；Heap / MinHeap=3432 B，SPSC P/C Stack 剩余 876/444 B。
+- SPSC 功能 checkpoint：`d93665e` 已在独立分支提交并推送，用户确认工作区 clean；父 M4 文档 checkpoint 为 `405b9ab`。
 
 ## In Progress
 
-M3 最终文档和 Git 收尾。M3 功能代码、板级验证、资源测量和并发压力实验已经完成；当前正在同步测试记录、项目状态、每日开发日志、技术决策、知识缺口、路线图和会话交接。文档 checkpoint 完成后推送远程并通过 PR 合并到 main。
+- SPSC 测试作为可选构建代码保留，源文件 `Inc/m4_spsc_test.h` / `Src/m4_spsc_test.c`，通过 `M4_ENABLE_SPSC_TEST` 启用；需要确认 CMake Cache `OFF` 后正式基线 clean build、烧录、无 SPSC 日志的回归证据。
+- 按 M4 关闭标准补齐 SPSC 版本 NRST ×3、完全断电重启 ×3；之前 M1～M3 的重启记录不替代本次最终固件测试。
+- 将 `feature/m4-spsc-concurrency-verification` 经 PR 合入 `feature/m4-rtos-communication-baseline`，在合并后复核真实工作区、功能和资源。
+- 更新 M4 最终集成报告与文档 Git checkpoint，随后评估 M4 → `main` 的 PR 合并与 M5 分支建立。
 
 ## Blocked
 
-无。
+当前无确认的外部依赖阻塞；剩余项主要是实机复位/正式基线验证，以及 Git PR 与文档收尾，不能视为已完成。
 
 ## Known Bugs
 
-无已确认固件 Bug。
+当前日志中无已确认且尚未解决的固件运行 Bug。
 
-当前日志接口只作为正常 Task / Thread 上下文 API，尚未实现 ISR-safe 日志；异步日志、DMA 日志、Queue、Task Notification、Ring Buffer、ADC、DMA、USART2 RX、RS485 和 Modbus 属于后续里程碑范围，不作为已知 Bug。
+- M4.1 Queue Producer 历史 Stack 不足、M4.3 同步任务 Stack 余量不足，已在既有 checkpoint 调优。
+- M4.4 Ring Buffer Consumer 曾因未检查读取返回状态重复打印旧值，已修复并有确定性测试记录。
+- CubeMX Generate Code 曾将 LF 工作区文件改为 CRLF，导致大量 Git 工作区噪声；已用字节级定向 CRLF → LF 方式恢复，仍属于每次重新生成后要检查的开发流程风险。
+- TIM7 早期生成的 ARR 为 9，与目标 999 不一致；随后确认 `.ioc` 为 `TIM7.Period=999`、重新生成的 `Src/tim.c` 为 999，已解决。
+- Ring Buffer 文档的数据类型/字节容量与先前上传的源码快照不一致，属于待复核的文档一致性问题，而非已证实的运行 Bug。
+- Ring Buffer **Task ↔ Task SPSC** 已通过 50,000 元素专项验证；**ISR ↔ Task 共享 Ring Buffer、DMA Ownership、多生产者**仍未验证，属于适用边界而非已确认 Bug。
+- 当前同步 `LOG_xxx()` 不是 ISR-safe。
 
 ## Current Branch
 
-- feature/m3-debug-infrastructure，已关联远程 origin/feature/m3-debug-infrastructure。
-- 当前 M3 最新功能 checkpoint 为 `4701c62`：feat: route FreeRTOS runtime output through debug logger。
-- 前一功能 checkpoint 为 `6a760d3`：feat: establish debug logging infrastructure。
-- 当前 main 与 origin/main 位于 `72ced0a`，已经包含完整 M2。
-- M3 功能 checkpoint 已推送远程；当前正在进行最终文档同步，文档关闭 checkpoint 尚未创建。
+- 最新用户确认 Branch：`feature/m4-spsc-concurrency-verification`。
+- Upstream：`origin/feature/m4-spsc-concurrency-verification`。
+- HEAD / origin：`d93665e`：`feat: verify M4 ring buffer SPSC concurrency baseline`（用户明确确认工作区 clean）。
+- 父级 M4 主开发分支：`feature/m4-rtos-communication-baseline`，最近已知 HEAD / origin 为 `405b9ab`：`docs: record M4 ISR notification baseline verification`。
+- 历史 M4.5 功能 `adf5d5e`；Semaphore 恢复 `c4c0721`；Ring Buffer 基础功能 `f8c3e52`。
+- **没有本次 SPSC → M4 PR 完成或 M4 → main 合并成功的证据**。本 ZIP 文档更新尚未写入用户仓库、尚无新的文档提交号。
 
 ## Last Verified Function
 
-- M3 Debug Infrastructure Final Baseline 已经通过 STM32F407VGT6 真实硬件验证：
-    - USART2 调试输出已统一进入 debug_log 模块。
-    - FreeRTOS 业务 Task 不再直接承担日志 UART 发送和格式化职责。
-    - 当前支持 DEBUG、INFO、WARN、ERROR 四级日志。
-    - DEBUG_LOG_ENABLE 全局编译期开关已经通过 clean build 验证。
-    - 四级日志编译期过滤已经通过真实串口输出验证。
-    - 当前日志共享 buffer 为 128 B static buffer。
-    - CMSIS-RTOS2 Mutex 保护日志格式化和 UART 阻塞发送完整临界区。
-    - 双任务约 10 ms 长日志并发压力条件下未观察到输出交叉、乱码、Hang 或 HardFault。
-    - HeartBeatTask：osPriorityNormal，512 B Stack，历史最小剩余约 384 B。
-    - UARTTask：osPriorityNormal，1024 B Stack，历史最小剩余约 512 B。
-    - FreeRTOS Current Free Heap：13504 B。
-    - FreeRTOS Minimum Ever Free Heap：13504 B。
-    - 完整日志开启构建：FLASH 27424 B，RAM 21056 B。
-    - 完整日志关闭构建：FLASH 21316 B，RAM 20512 B。
-    - NRST ×3：通过。
-    - 完全断电重新上电 ×3：通过。
-    - 未观察到 HardFault、Hang、日志异常停止或 Heap 持续下降。
-    - 当前最新功能 checkpoint 为 `4701c62`。
+2026-10-27 最新专项：M4 Ring Buffer **Task ↔ Task SPSC**，同时保留 M4 联合通信验证。
 
-当前证据不包含 ISR-safe logging、异步 LogTask、UART DMA logging、Queue、Task Notification、Ring Buffer、USART2 RX、ADC/DMA、RS485、Modbus 或长时间压力可靠性测试。
+- 硬件/系统：STM32F407VGT6 + FreeRTOS / CMSIS-RTOS2，Ring Buffer `uint32_t buffer[8]`，可用容量 7 元素，C11 `_Atomic head/tail`。
+- 并发测试：SPSC Producer 与 Consumer 两独立任务；不以逐次 Flag 控制交换次序；接收侧逐项校验 1..50000。
+- 实测日志：
+
+```text
+[I][SPSC] START total=50000 capacity=7 elements
+[I][SPSC] PASS sent=50000 recv=50000 full=7064 empty=7419
+[I][SPSC] overflow=7064 elapsedTicks=7501
+[I][SYS] SpscPFree=876 B SpscCFree=444 B
+[I][SYS] M4EvtFree=528 B M4WorkFree=528 B Heap=3432 B MinHeap=3432 B
+[I][SYS] ISRWorkerFree=520 B
+```
+
+- 同机回归观察：M4Q `seq=1..40` 连续，M4F 事件成对接收，Semaphore Release/Acquire 持续，Mutex 共享数值按 A:+1/B:+10 变化；TIM7 统计 `irq=70 received=70 errors=0`（日志截取窗口）。
+- 结论：本次 50,000 个数据未出现顺序校验失败，Full/Empty 均出现，测试程序报告 PASS；`overflow=7064` 是满时失败写入尝试，不是 7064 个最终丢失数据。
+- 资源：SYS 采样中 Heap/MinHeap 均为 3432 B，SPSC Consumer Stack 剩余 444 B；不能将 7.501 秒的专项测试误写成长期工业级压力证明。
+- 与之前暂时将 Ring Buffer 基础测试放在 Semaphore 任务中的联合实验不同；原联合运行用户确认长期通过，记录为**另一项**测试，不混成无阶段同步 SPSC。
+- 运行范围：Task ↔ Task 单生产者/单消费者，不覆盖 ISR ↔ Task、DMA 和多生产者访问。
+- 提交：`d93665e` 已推送独立 SPSC 分支；合并与正式固件最终验收待执行或待提交证据。
 
 ## Next Step
 
-完成 M3 文档关闭 checkpoint 并推送 feature/m3-debug-infrastructure。
-
-检查功能分支相对 main 的完整 diff、git diff --check、Git 历史和远程 tracking 状态后，通过 PR 将 M3 合并到 main。
-
-确认本地 main 与 origin/main 同步、工作区 clean 后正式关闭 M3。随后进入 M4：数据缓冲与任务间通信，优先学习 Queue、Task Notification、Ring Buffer、数据所有权和生产者/消费者模型，不提前进入 ADC、DMA、RS485 或 Modbus。
+1. 如尚未完成，补齐 SPSC 专项 NRST ×3、Power-cycle ×3 以及 SPSC PASS 后其余 M4 模块继续稳定运行的实测证据。
+2. 显式设置 `cmake --preset Debug -DM4_ENABLE_SPSC_TEST=OFF`，执行 clean build、烧录正式固件，检查没有 `[SPSC] START` 且 Queue / Semaphore / Mutex / Thread Flags / TIM7 ISR 正常、资源稳定。
+3. 审核 `d93665e` 的六个目标文件及原子内存序实现，创建并合并 SPSC → M4 PR（Base: M4；Compare: SPSC）；确认远程状态并 fast-forward 本地 M4 分支。
+4. 合并后的正式 M4 分支再次构建/板级验收，归档 `TEST_RECORD.md` 和其他 docs 的最终事实与未覆盖边界，建立 docs checkpoint。
+5. M4 最终验收通过后，通过 PR 将 M4 → `main`；**未确认前不得把 M4 写为完成**，不提前创建 M5 功能分支。

@@ -283,3 +283,648 @@ M4 中实际建立 Queue 数据传递实验。
 ### 状态
 
 已掌握当前 M3 阶段所需基础。
+
+## KG-006：FreeRTOS Queue、数据所有权与 Backpressure
+
+### 来源
+
+M4.1 Queue Producer / Consumer、Queue Full、Sequence Gap 和 Task Stack 压力验证过程。
+
+### 当前理解
+
+已经通过真实 STM32F407VGT6 验证 CMSIS-RTOS2 Message Queue 的基本 Task → Task 数据传递行为。
+
+当前已经理解：
+
+- Queue 可以在 Producer 和 Consumer 之间建立明确的数据交接边界。
+- 当前 `M4QueueMessage_t` Queue 使用按值复制，`osMessageQueuePut()` 使用消息地址作为复制源，而不是将 Producer 局部变量指针保存进 Queue。
+- Producer 后续修改自己的局部 `message` 不会修改已经进入 Queue 的数据副本。
+- Consumer 使用 `osMessageQueueGet(..., osWaitForever)` 时，在 Queue 为空期间进入 Blocked，而不是持续 Busy Polling。
+- Queue Put timeout = 0 时，Queue 满会立即返回失败，适合明确暴露 Backpressure。
+- Queue Length 只能吸收有限时间的突发数据，不能解决长期 Producer Throughput 大于 Consumer Throughput。
+- Queue Full 只会使新的 Put 失败，不会破坏此前已经成功进入 Queue 的旧消息。
+- Consumer 不一定在第一次 Drop 时立即看到 Sequence Gap，因为 Queue 中可能仍有 Drop 发生前的连续旧库存。
+- 当旧库存消费完成后，Drop 会表现为 `expected_sequence != actual_sequence`。
+- Task Stack 必须根据最坏执行路径测量；正常路径余量充足不代表异常日志路径也安全。
+- Queue Full 后的同步日志格式化路径会显著增加 Producer Stack 峰值。
+- FreeRTOS 动态 Task Stack 会直接占用 FreeRTOS Heap。
+
+当前 M4.1 Final Baseline：
+
+- Queue Length：8。
+- Queue Item：12 B。
+- Producer Stack：1024 B。
+- Consumer Stack：1024 B。
+- Producer Period：200 ms。
+- Put Timeout：0。
+- Consumer Wait：`osWaitForever`。
+- Current Free Heap：11048 B。
+- Minimum Ever Free Heap：11048 B。
+
+### 缺少什么
+
+尚未实际掌握和验证：
+
+- Binary Semaphore。
+- Binary Semaphore 与 Mutex 的实际行为差异。
+- Queue 传指针时的生命周期和所有权管理。
+- ISR → Task Queue / Notification。
+- ISR-safe 通信 API 和必要的高优先级任务唤醒行为。
+- 多 Producer / 多 Consumer Queue 设计。
+- Ring Buffer 与 Queue 的职责区别。
+
+### 学习优先级
+
+当前 Queue 基础已经完成。
+
+Task → Task Thread Flags 基础已经通过 M4.2 实验验证，并单独记录在 KG-007。
+
+下一优先级是 Binary Semaphore 与 Mutex 对比，然后进入 Ring Buffer，M4 后期再验证 ISR → Task 边界。
+
+### 学习任务
+
+- 建立 Binary Semaphore Task → Task 同步实验。
+- 使用现有 Debug Logger Mutex 对比事件同步与资源所有权保护语义。
+- 实现独立于 RTOS 的 Ring Buffer。
+- 验证 Ring Buffer 满、空和回绕边界。
+- M4 后期验证 ISR → Task Queue / Thread Flags 边界。
+- 后续实际需要传递大型 Buffer 指针时再建立明确的生命周期和所有权规则。
+
+### 状态
+
+Queue 基础已掌握。
+
+Thread Flags Task → Task 基础见 KG-007。
+
+Binary Semaphore、Ring Buffer 和 ISR / Task 边界仍待验证。
+
+## KG-007：CMSIS-RTOS2 Thread Flags、事件通知与重复事件合并
+
+### 来源
+
+M4.2 Task → Task Thread Flags 正常通知、重复 Flag bit 合并和 Final Baseline 稳定性验证过程。
+
+### 当前理解
+
+已经通过真实 STM32F407VGT6 验证 CMSIS-RTOS2 Thread Flags 的 Task → Task 基础行为。
+
+当前已经理解：
+
+- Thread Flags 是绑定在线程上的轻量事件状态机制，应用层不需要像 Message Queue 一样额外创建独立消息容器。
+- `osThreadFlagsWait(..., osWaitForever)` 可以让 Work 在没有事件时进入 Blocked 状态。
+- `osThreadFlagsSet()` 设置对应事件位后，等待该事件的 Work 能够恢复执行。
+- 当前正常配置下，M4EventTask 每 1000 ms Set 一次 `M4_EVENT_WORK_READY`，M4WorkTask 能够稳定保持 Set Count 与 Receive Count 1:1。
+- Thread Flags 不用于复制 `M4QueueMessage_t` 这类结构化数据。
+- Queue 负责保存有限数量的独立消息，Thread Flags 更适合表达“某项工作待处理”。
+- 同一个 Flag bit 在 Work 获得执行机会前被重复 Set 时不会累计多个独立事件。
+- 已通过人工优先级实验稳定观察到：
+  - 33 次相同 Flag Set。
+  - Work 实际消费 11 次。
+- 对同一个 bit 重复 Set 的本质是保持该 bit 为 Pending 状态，而不是建立 Event Count。
+- 因此 Thread Flags 不能被直接当作无损事件计数器。
+- 如果未来不同事件必须被区分，可以使用不同 Flag bit；如果同类事件的每一次发生都必须保存，则需要 Queue、Counting Semaphore 或其他具有计数 / 缓冲语义的机制。
+- Debug Logger 输出顺序只能作为功能观测证据，不应该被当作 RTOS 内核精确调度 Trace。
+
+当前 M4.2 Final Baseline：
+
+- M4EventTask：
+  - Priority：`osPriorityNormal`
+  - Stack：1024 B
+  - Period：1000 ms
+- M4WorkTask：
+  - Priority：`osPriorityNormal`
+  - Stack：1024 B
+- Event Flag：
+  - `M4_EVENT_WORK_READY`
+- Work：
+  - `osThreadFlagsWait(..., osWaitForever)`
+- Current Free Heap：8776 B。
+- Minimum Ever Free Heap：8776 B。
+- M4EventTask 历史最小剩余 Stack：528 B。
+- M4WorkTask 历史最小剩余 Stack：528 B。
+- NRST ×3：通过。
+- Power-cycle ×3：通过。
+
+### 缺少什么
+
+尚未实际掌握和验证：
+
+- ISR → Task Thread Flags。
+- CMSIS-RTOS2 Thread Flags 在 ISR 场景中的具体限制和安全调用边界。
+- 多个不同 Flag bit 同时 Pending 时的完整处理策略。
+- `osFlagsWaitAny` 与更复杂 Flag 组合的工程应用。
+- DMA Half Complete / Full Complete 使用不同 Flag bit 后的实际行为。
+- 事件通知与 Buffer Ownership 同时存在时的最终数据采集架构。
+- CMSIS-RTOS2 Thread Flags wrapper 与 FreeRTOS 底层 Notification 实现细节的更深入对应关系。
+
+### 为什么重要
+
+M5 ADC + Timer + DMA 和后续 UART DMA 都会产生“数据已经准备好”的异步事件。
+
+如果把 Thread Flags 错误理解为事件计数器，当 Producer / ISR 产生事件的速度超过 Consumer Task 的处理速度时，可能错误地认为每一次事件都会被保留，从而造成不可见的数据丢失或 Buffer 状态错误。
+
+必须明确区分：
+
+- Event State：某项工作需要处理。
+- Event Count：事件实际发生了多少次。
+- Data：需要处理的数据内容。
+- Buffer Ownership：当前哪一个执行上下文拥有对应 Buffer。
+
+### 学习优先级
+
+Task → Task Thread Flags 基础已经完成。
+
+下一阶段优先完成 Binary Semaphore 与 Mutex 对比。
+
+ISR → Task Thread Flags 和 DMA Buffer 事件设计在 M4 后期与 M5 数据采集阶段继续深化。
+
+### 学习任务
+
+- M4.3 建立 Binary Semaphore Give / Take 实验。
+- 对比 Thread Flags、Binary Semaphore、Mutex 和 Queue 的职责。
+- M4 后期设计一个最小 ISR → Task 通知实验。
+- M5 ADC DMA 阶段分别考虑 Half Ready 和 Full Ready 事件。
+- 在正式使用 DMA Buffer 前建立明确的数据状态与 Buffer Ownership 模型。
+
+### 小实验
+
+已完成：
+
+- Task → Task 单 Flag 正常通知。
+- `osThreadFlagsWait(..., osWaitForever)` 阻塞等待。
+- 正常路径 11 Sets → 11 Receives。
+- 相同 Flag bit 三连 Set Burst。
+- 33 Sets → 11 Receives 事件合并验证。
+- Event Producer 临时高优先级可重复实验。
+- Thread Flags 与 Queue 并行运行。
+- 新增 Task Stack 与 FreeRTOS Heap 重新测量。
+- M4.2 Final Baseline NRST ×3。
+- M4.2 Final Baseline Power-cycle ×3。
+
+### 状态
+
+Task → Task Thread Flags 基础已掌握。
+
+相同 Flag bit 的事件合并语义已经通过真实硬件实验验证。
+
+ISR → Task、多 Flag 和 DMA Buffer Ownership 仍待后续验证。
+
+## KG-008：Binary Semaphore、Mutex、临界区与同步任务 Stack 余量
+
+### 来源
+
+M4 Binary Semaphore Task → Task 同步、Mutex 共享数据保护、Queue / Thread Flags / Semaphore / Mutex 联合运行和同步任务 Stack 调优过程。
+
+### 当前理解
+
+已经通过真实 STM32F407VGT6 验证 CMSIS-RTOS2 Binary Semaphore 和 Mutex 的基础行为。
+
+当前已经理解：
+
+- Binary Semaphore 可以用于 Task → Task 同步。
+- `osSemaphoreNew(1, 0, ...)` 建立初始不可用的 Binary Semaphore。
+- Consumer 使用 `osSemaphoreAcquire(..., osWaitForever)` 时，在 Semaphore 不可用期间进入阻塞等待。
+- Producer `osSemaphoreRelease()` 后等待 Task 能够恢复执行。
+- Binary Semaphore 当前表达同步信号，不负责携带结构化数据。
+- Binary Semaphore 不应该被直接当作 Mutex 使用。
+- Mutex 用于保护共享资源和 Read-Modify-Write 临界区。
+- 两个 Task 在同一个 Mutex 下访问 `shared_value` 时能够保持数据更新连续。
+- 临界区应该尽量短。
+- 不应在 Mutex 持有期间加入无必要 Delay、复杂格式化或长时间阻塞 I/O。
+- 将 Logger 放在 Mutex Release 后可以缩短临界区。
+- Logger 位于临界区外后，UART 日志的打印顺序可能和真实临界区执行顺序不同。
+- 因此日志顺序不能被直接视为 RTOS 调度 Trace。
+- 在临界区内生成 `shared_op_seq` 可以更可靠地记录共享数据实际操作顺序。
+- 按 `shared_op_seq` 检查时，前一次 after 与下一次 before 连续，可以作为当前互斥保护有效的观测证据。
+- Queue、Thread Flags、Binary Semaphore 和 Mutex 当前职责可以区分为：
+  - Queue：数据和独立消息。
+  - Thread Flags：Pending Event State。
+  - Binary Semaphore：同步信号。
+  - Mutex：共享资源所有权与互斥。
+- Task 能够长期运行不等于 Stack 配置安全。
+- `osThreadGetStackSpace()` 的历史最小剩余空间必须用于检查最坏已执行路径。
+- 本次新增同步 Task 初始最小余量：
+  - Semaphore Task：32 B。
+  - Mutex Task：8 B。
+- 该余量虽然尚未出现可见 Stack Overflow，但不足以作为稳定 baseline。
+- 调整后：
+  - Semaphore Task 最小余量：288 B。
+  - Mutex Task 最小余量：488 B / 520 B。
+- 动态创建 Task 增加 Stack 后会直接减少 FreeRTOS Heap。
+- 本次 Stack 总增量约 1536 B，Free Heap 同样减少约 1536 B，实际资源变化与配置一致。
+- Current Free Heap 与 Minimum Ever Free Heap 长期保持一致时，可以说明当前观察窗口内未发生进一步的最坏 heap 消耗。
+
+当前同步机制 Final 资源观察：
+
+```text
+HeartFree=384 B
+UARTFree=488 B
+M4ProdFree=808 B
+M4ConsFree=496 B
+M4EvtFree=528 B
+M4WorkFree=528 B
+SemProFree=288 B
+SemConFree=288 B
+MutexAFree=488 B
+MutexBFree=520 B
+Heap=4568 B
+MinHeap=4568 B
+```
+
+### 缺少什么
+
+尚未实际掌握和验证：
+
+- Counting Semaphore。
+- Binary Semaphore 连续重复 Release 的更多边界。
+- ISR → Task Semaphore 的 CMSIS-RTOS2 安全使用边界。
+- Mutex Priority Inheritance 的实际行为。
+- Priority Inversion 可重复实验。
+- 多个 Mutex 同时存在时的 Lock Ordering。
+- Deadlock 人工构造与诊断。
+- Ring Buffer 与 Semaphore / Event 的组合模型。
+- DMA Buffer Ownership 与同步机制的组合设计。
+
+### 为什么重要
+
+M5 ADC + Timer + DMA 和后续 UART DMA 会同时涉及：
+
+- ISR 事件。
+- Buffer Ready 状态。
+- Task 唤醒。
+- 数据所有权。
+- 共享状态。
+- 实时资源约束。
+
+如果不能区分 Queue、Thread Flags、Semaphore 和 Mutex 的职责，可能出现：
+
+- 把同步状态误当数据缓冲。
+- 把 Mutex 误当事件通知。
+- 事件丢失。
+- 共享数据覆盖。
+- 临界区过长。
+- 优先级反转。
+- 死锁。
+- Stack 安全余量不足。
+
+因此进入 M5 前需要先把 M4 的 Ring Buffer 和 ISR → Task 边界补齐。
+
+### 学习优先级
+
+Binary Semaphore 与 Mutex 基础已经完成。
+
+下一优先级：
+
+1. Ring Buffer。
+2. ISR → Task 通信边界。
+3. Buffer Ownership。
+4. 再进入 M5 ADC + Timer + DMA。
+
+Priority Inheritance、复杂 Deadlock 和 Counting Semaphore 在实际需求出现或 M4 剩余时间允许时继续深化，不作为进入 Ring Buffer 的前置阻塞条件。
+
+### 学习任务
+
+- 实现独立 Ring Buffer。
+- 验证 Empty / Full / Wrap-around。
+- 明确 Ring Buffer 单 Producer / 单 Consumer 基础假设。
+- 建立最小 ISR → Task 通信实验。
+- 核对 CMSIS-RTOS2 ISR-safe API。
+- ISR 中保持非阻塞和最小执行路径。
+- M5 前建立 ADC DMA Buffer Ownership 草案。
+- 后续有明确优先级场景时构造 Mutex Priority Inversion / Inheritance 实验。
+
+### 小实验
+
+已完成：
+
+- Binary Semaphore 初始 Depleted。
+- Consumer `osWaitForever` Blocking Acquire。
+- Producer 周期 Release。
+- Waiting → Release → Acquired → Waiting。
+- Binary Semaphore 与 Queue / Thread Flags 并行运行。
+- 双 Task Mutex 共享数据保护。
+- A `+1` / B `+10` Read-Modify-Write。
+- 临界区外 Logger。
+- `shared_op_seq` 临界区顺序观测。
+- Queue + Thread Flags + Semaphore + Mutex 联合长期运行。
+- Semaphore / Mutex Task Stack High Water Mark 测量。
+- 初始 32 B / 8 B Stack 风险识别。
+- Stack 调整后长期重新验证。
+- FreeRTOS Heap 与 Stack 增量一致性验证。
+
+### 状态
+
+Binary Semaphore Task → Task 基础已掌握。
+
+Mutex 共享数据基础互斥行为已通过真实硬件验证。
+
+同步任务 Stack 资源调优方法已完成实机验证。
+
+Ring Buffer、ISR → Task、Priority Inheritance 和 DMA Buffer Ownership 仍待后续验证。
+
+## KG-009：Ring Buffer、FIFO、溢出统计与 ISR / Task 数据所有权
+
+### 来源
+
+M4 Ring Buffer 独立模块开发、C 指针错误修正、FreeRTOS 双 Task 确定性测试、溢出统计设计和真实 STM32F407VGT6 板级验证过程。
+
+### 当前理解
+
+已经通过实际编程和板级测试掌握 Ring Buffer 基础数据结构。
+
+当前理解：
+
+- Ring Buffer 使用固定容量数组循环存储数据。
+- head 指向下一个写入位置。
+- tail 指向下一个读取位置。
+- head 和 tail 使用数组索引，而不是直接保存数据值。
+- 使用预留一个空槽可以避免 Empty / Full 状态歧义。
+- Empty 判断为 head == tail。
+- Full 判断为 (head + 1U) % SIZE == tail。
+- 物理数组长度为 8 时，有效容量为 7。
+- 成功写入后才移动 head。
+- 成功读取后才移动 tail。
+- Full 写入失败不能破坏已有数据。
+- Empty 读取失败不能修改输出数据。
+- 对索引取模可以完成循环回绕。
+- FIFO 表示先写入的数据先被读取。
+- RingBufferStatus_t 用于区分成功、Full、Empty 和非法参数。
+- 调用者必须检查 ReadByte / WriteByte 的返回状态。
+- 不能将日志打印视为操作成功的证据。
+- overflow_count 应记录实际发生的溢出写入事件。
+- 不能将多次检查到 Full 直接等同于多次数据丢失。
+- 当前 Full 策略为拒绝新数据，不覆盖旧数据。
+- 覆盖旧数据和丢弃新数据适用于不同业务要求。
+- Ring Buffer 只能吸收有限的短期数据积压。
+- 如果长期生产速度大于消费速度，增加 Buffer 容量只能推迟溢出。
+- 优化 Consumer 处理能力通常比单纯增加容量更重要。
+- 数据丢失统计和告警对于工业采集系统具有实际意义。
+
+已完成确定性板级测试：
+
+```text
+EMPTY       PASS
+FULL        PASS
+FULL READ   PASS
+WRAP WRITE  PASS
+WRAP READ   PASS
+```
+
+当前测试结果：
+
+```text
+overflow_count = 1
+Final head     = 1
+Final tail     = 1
+```
+
+当前能够解释为什么这些结果符合 Ring Buffer 的设计预期。
+
+### 缺少什么
+
+尚未实际掌握和验证：
+
+- Ring Buffer SPSC 并发模型。
+- 单 Producer / 单 Consumer 的索引写入所有权。
+- ISR 与 Task 共享变量的原子访问条件。
+- volatile 的作用和局限。
+- 编译器优化与内存访问顺序。
+- 必要的内存屏障和同步策略。
+- ISR → Task **数据**交接过程（M4.5 已验证事件通知，尚未验证 Ring Buffer 数据共享）。
+- CMSIS-RTOS2 更复杂 ISR-safe API 与高负载下事件合并、唤醒延迟的边界（当前已验证 Thread Flags 基线）。
+- 多生产者 / 多消费者 Ring Buffer 的复杂性。
+- 覆盖旧数据时对 tail 所有权的影响。
+- 数据丢失告警和恢复状态机。
+- DMA Half / Full Buffer Ownership。
+- 采样数据批量搬运与消费任务处理能力预算。
+
+### 为什么重要
+
+M5 ADC + Timer + DMA 将持续产生采样数据。
+
+后续 M6 UART DMA + IDLE 和其他通信模块也可能产生连续数据流。
+
+如果 Ring Buffer 和同步边界设计错误，可能造成：
+
+- 数据覆盖。
+- 数据丢失。
+- FIFO 顺序破坏。
+- 重复读取。
+- 读取尚未写入完成的数据。
+- 读写索引竞争。
+- 丢失中断事件。
+- Consumer 无法及时处理数据。
+- 实际故障被不准确的日志掩盖。
+- 工业采集结果不可靠。
+
+因此，M4 不仅需要 Ring Buffer 基础算法，还需要继续建立 ISR / Task 数据交接的正确边界。
+
+### 学习优先级
+
+Ring Buffer 基础数据结构已经完成。
+
+下一优先级：
+
+1. 已完成：TIM7 + CMSIS-RTOS2 ISR Thread Flags 通知基线。
+2. 待深化：SPSC Ring Buffer 数据所有权。
+3. 待深化：原子性、volatile 与内存可见性。
+4. 待验证：ISR / Task 并发数据一致性。
+5. 后续：ADC DMA Buffer Ownership。
+6. 后续：数据丢失统计与告警策略。
+
+### 学习任务
+
+- 复习当前 RingBuffer_t 的 head / tail 所有权。
+- 研究 ISR 与 Task 访问共享状态的约束。
+- 阅读 CMSIS-RTOS2 中断上下文 API 规则。
+- 已建立 TIM7 中断通知任务实验；后续补充高负载、并发数据访问验证。
+- 验证 Task 阻塞等待与唤醒。
+- 避免在 ISR 中使用当前同步 Logger。
+- 建立可重复的数据顺序和完整性验证。
+- 根据实验结果决定 Ring Buffer 是否需要增加同步机制。
+- 为后续 DMA 数据缓冲建立独立所有权规则。
+
+### 小实验
+
+已完成：
+
+- Ring Buffer 初始化。
+- Empty 判断。
+- Full 判断。
+- Full 写入失败。
+- Full 后已有数据保留。
+- FIFO 数据读取。
+- Read Index 回绕。
+- Write Index 回绕。
+- Empty 再次读取。
+- overflow_count 增量验证。
+- 双 Task Thread Flags 阶段同步测试。
+- 五个测试阶段全部 PASS。
+- Ring Buffer 测试期间 Stack / Heap 观测。
+- TIM7 ISR → Worker Thread Flags 基础通知验证（`adf5d5e`，`irq=30/40/50/60` 对应 `received`，`errors=0`）。
+
+待完成：
+
+- ISR → Task 数据交接及高负载通知语义验证。
+- SPSC 并发读写实验。
+- 内存可见性与必要同步验证。
+- 并发情况下的溢出统计正确性。
+- M5 DMA Buffer Ownership 实验。
+
+### 状态
+
+Ring Buffer 基础原理已掌握。
+
+Ring Buffer 单线程语义和串行协调的双 Task 确定性功能测试已经通过真实开发板验证。
+
+Full / Empty / Wrap-around 和 FIFO 顺序已完成验收。
+
+当前基础功能 checkpoint 为 `f8c3e52`；ISR → Task **事件通知** checkpoint 为 `adf5d5e`。
+
+ISR / Task 并发安全、覆盖模式、DMA 数据所有权和正式工业级告警机制仍待后续学习与验证。
+
+
+### 历史资料一致性待复核（2026-10-23）
+
+当前文档历史基线将 Ring Buffer 描述为 `uint8_t`、物理 8 B / 有效 7 B；此前上传的工程快照 `Inc/ring_buffer.h` 却为 `uint32_t buffer[8]`，`WriteByte` / `ReadByte` 参数也为 `uint32_t`。这两个来源不一致。最终集成前必须基于**最新仓库 HEAD**核对实际类型和字节数；若确认为 `uint32_t`，应按“物理 8 个元素 / 32 B、有效 7 个元素 / 28 B”描述，并评估 API 命名。不得据旧文档自行假设最新版源码已改为 `uint8_t`。
+
+
+### 2026-10-27 SPSC 并发专项补充（覆盖上方当时的“待完成”状态）
+
+- 已完成：在独立 SPSC Producer / Consumer Task 中，无逐元素 Thread Flags 阶段同步，完整传输 `50000` 个递增 `uint32_t` 元素；测试输出 `PASS`，Full 重试 `7064`、Empty 重试 `7419`、Overflow 计数 `7064`。
+- 已完成：理解 C11 `_Atomic` `head/tail` 的 acquire/release 数据发布顺序；Producer 只写 `head`、Consumer 只写 `tail`，各自通过 acquire 检查对侧游标，满时保留当前待发送元素并重试。
+- 数据容量核准：物理 8 个 `uint32_t` = 32 B，预留空槽有效 7 个 `uint32_t` = 28 B；历史的 8 B / 7 B 记录是当时误记，保留历史原文并以本条修正现行理解。API `WriteByte`/`ReadByte` 名称仍需与实际元素宽度做命名规范评审。
+- 实测：`elapsedTicks=7501`；`SpscPFree=876 B`、`SpscCFree=444 B`、`Heap=MinHeap=3432 B`（展示采样）。
+- 已实现范围：**Task ↔ Task 单生产者单消费者并发**；不代表 ISR ↔ Task 共享环形缓存、MPSC / MPMC、DMA 数据块所有权已验证。
+- 待深化：复位恢复专项、不同编译优化级别下的性能、满载吞吐/时延上界、DMA Half/Full Ownership、数据丢弃策略。
+- 功能 checkpoint：`d93665e`，在独立 `feature/m4-spsc-concurrency-verification` 分支；PR 合并结果待确认。
+
+## KG-010：TIM7 ISR → Task、NVIC 约束与事件合并
+
+### 来源
+
+2026-10-18～10-20 M4.5 TIM7 配置、FreeRTOS ISR API 核对及 STM32F407VGT6 板级通信实验。
+
+### 当前理解
+
+- TIM7 84 MHz 输入，PSC=8399、ARR=999，100 ms 更新事件。
+- TIM6 HAL 时基的 `HAL_IncTick()` 仅由 TIM6 分支调用，TIM7 可独立接入既有 HAL 回调。
+- TIM7 抢占优先级数值 5，在 4 位抢占优先级分组与 FreeRTOS Syscall IRQ 阈值数值 5 下允许执行相应 ISR-safe CMSIS-RTOS2 接口。
+- ISR 做最小工作：累加统计、Set Thread Flag；不使用同步日志和阻塞 API。
+- Worker 使用 `osThreadFlagsWait(osWaitForever)` 阻塞接收；Task 中进行非实时日志输出。
+- 当前 `irq=30/40/50/60` 和 `received` 在采样点一致，`errors=0`；仅证明当时 10 Hz 负载下的链路行为。
+- 相同 Flag bit 可合并，不能当成精确计数队列。
+
+### 缺少什么
+
+- 同一 Flag bit 被高频重复设置时的定量事件合并、吞吐量与处理延迟实测。
+- 高负载下抢占调度与 ISR/Task 临界区的时序分析。
+- IRQ 中断计数、Worker 接收计数与真实业务事件的严格一致性设计。
+- 使用 Queue 或数据缓冲传送多次事件的更强语义与超限处理。
+
+### 为什么重要
+
+M5 ADC DMA 会产生连续事件；只会通知并不足以保证业务样本未丢失，必须同时设计数据所有权和消费能力。
+
+### 学习优先级
+
+M4.5 基础链路已完成；在 M4 Final Integration 完成后继续深入，高负载实验不阻塞本次功能 checkpoint。
+
+### 学习任务
+
+- 保留已验证 TIM7 100 ms 事件通知基线。
+- 设计可观测的事件合并/过载实验，不在 ISR 打印日志。
+- 比较 Thread Flags 事件状态与无损计数/Queue 的差异。
+- 为 DMA Half/Full 的通知与数据交接制定不同的职责边界。
+
+### 小实验
+
+已完成：TIM7 100 ms、NVIC 中断优先级检查、Worker 阻塞/唤醒、低频通知统计、联合运行时资源采样。
+
+待完成：高负载事件合并量化与通知延迟测量；SPSC 数据并发实验。
+
+### 状态
+
+基础功能 PASS，`adf5d5e` 已提交并推送；高负载和数据所有权边界未验证。
+
+## KG-011：CubeMX 配置源、LF 规范与生成代码回归
+
+### 来源
+
+2026-10-18 多次 TIM7 代码生成引起 EOL-only 噪音以及 `TIM7.Period` 与 `tim.c` 暂时不同步的排查。
+
+### 当前理解
+
+- Git 索引 LF、工作区 CRLF、`.gitattributes` 要求 LF 可造成大量“已修改”噪音。
+- `core.autocrlf=false` 不保证 CubeMX 输出始终 LF。
+- 必须对照 `.ioc` 中配置与生成 C 文件值（例如 TIM7 ARR=999）。
+- 使用定向字节级 CRLF → LF 可以避免无意重新编码中文注释。
+- 代码生成后的 diff 应与功能范围一致，不能只根据构建成功判断源码未被覆盖。
+
+### 缺少什么
+
+- 更自动化且可重复的生成后 EOL 校验脚本与项目级 CI 规范。
+- CubeMX 版本更新对自定义 USER CODE 和中间件源文件的兼容性回归。
+
+### 为什么重要
+
+消除无关 diff 可以提高工程可审计性，避免覆盖已验证的 M4 模块和引入无法解释的修改。
+
+### 学习优先级
+
+中。M4 Final Integration 前需复用已经验证的流程。
+
+### 学习任务
+
+生成前备份；生成后检查 `git status`、`git ls-files --eol`、`git diff --ignore-space-at-eol`、`git diff --check`，定向处理并核对构建结果。
+
+### 小实验
+
+已完成：本次 TIM7 生成后恢复至有限文件 diff，构建与板级试验通过。
+
+### 状态
+
+当前问题已解决；流程自动化和 CI 集成待后续阶段。
+
+
+## KG-012：Task ↔ Task SPSC 并发验证、原子内存序与测试隔离
+
+### 来源
+
+2026-10-27 Ring Buffer 的 C11 原子索引修正、两个独立 FreeRTOS Task 的 50,000 元素并发板级测试和 M4 分支管理实践。
+
+### 当前理解
+
+- Ring Buffer 有效容量是 7 个 `uint32_t` 数据元素（28 B），并不等于 7 字节。
+- 使用 `_Atomic` `head` / `tail` 与 acquire/release 发布/消费关系，区别于仅使用 `volatile` 或只依赖 32 位自然对齐访问。
+- 满载拒绝并重试不等于最终数据丢失；当前 `overflow_count` 衡量失败写入尝试次数。
+- 独立 Producer 和 Consumer Task 可在正常调度下同时运行，不能借逐项握手制造串行行为再宣称并发验证。
+- 测试开关默认 OFF；控制可选测试的 CMake Cache 需要显式核对。
+
+### 缺少什么
+
+- ISR ↔ Task Ring Buffer 数据传递及中断上下文同步约束。
+- 在更高生产速率/不同优先级下的端到端时延分布、覆盖/丢弃策略与误码/缺口告警。
+- DMA Half/Full 数据所有权、缓存区生命周期、面向 M5 的过载预算。
+
+### 为什么重要
+
+M5 将引入真实周期采样源；仅有 Task ↔ Task SPSC 的 PASS 不意味着 DMA 生产侧或 ISR 直接共享数据时自动安全。
+
+### 学习优先级
+
+M4 关闭前先完成独立分支合并、OFF 正式固件回归与复位测试；DMA Ownership 作为 M5 前置设计。
+
+### 学习任务
+
+- 保存 SPSC 的构建开关、正式测试日志及 Git checkpoint。
+- 检查不同生产/消费速率下的统计语义；对外明确累计失败尝试与真实业务样本丢失的区别。
+- 设计 M5 DMA 缓冲区生产/消费所有权图与队列通知方案。
+
+### 小实验
+
+已完成：50,000 次连续值 SPSC，`sent=recv=50000`、Full=7064、Empty=7419、Overflow=7064、7501 ticks，其他 M4 模块同时运行；分支 `d93665e` 已推送。NRST ×3、Power-cycle ×3 的 SPSC 版本专项证据；OFF 后正式固件回归；ISR/DMA 生产路径并发实验。
+
+### 状态
+
+**Task ↔ Task SPSC 专项 PASS**。其他并发模型尚未验证，M4 总里程碑尚未正式关闭。
