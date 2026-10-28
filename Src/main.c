@@ -20,13 +20,12 @@
 #include "main.h"
 #include "cmsis_os.h"
 #include "tim.h"
-#include "m4_isr.h"
 #include "usart.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "m4_isr.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
