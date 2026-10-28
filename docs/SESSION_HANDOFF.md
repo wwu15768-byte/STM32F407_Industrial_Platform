@@ -1,47 +1,31 @@
 > 当前会话快照；会话切换前整体更新。
-> 更新时间：2026-10-27。
-> 最新已确认 Git 事实：`d93665e` 位于 `feature/m4-spsc-concurrency-verification` 并已推送 origin，用户确认工作区 clean；未收到 PR 已合并的结果。本 ZIP 只是文档附件，不代表 Git 已自动提交。
-> 以下 M0～M4.5 的旧基线章节作为**历史验证快照**保留；如与本页「当前」字样冲突，以 2026-10-27 的当前状态和最新验证章节为准。
+> 更新时间：2026-10-28（M5-P0 板级验收后，Git 功能/文档归档前）。
+> 最新用户确认 Git 基线：`feature/m5-adc-timer-dma-baseline`，清理前 HEAD / main / origin/main 均为 `e793039`（M4 PR #5 Merge）；此前 M4 已关闭并合并。
+> 以下“已完成并验证的内容”中 M0～M4 的 Queue / Semaphore / ISR 等任务结构只描述**当时的历史实验版本**，不代表当前固件仍在创建这些任务；最新运行结构以本页开头及末尾为准。
 
 ## 当前 Milestone
 
-M4：RTOS 通信、同步和数据缓冲，功能验证基本齐备，但最终验收、合并及里程碑关闭仍未完成。M0～M3 已完成。
+M5：ADC + Timer + DMA 实时数据采集子系统；当前 M5-P0（清理历史演示任务和日志）**Debug 增量构建、30 秒 UART、NRST ×3、Power-cycle ×3 已通过**，剩余文档导入与 Git Commit/Push。M0～M4 已完成。
 
-- M4.1 Queue：完成；M4.2 Task → Task Thread Flags：完成（含相同 Flag 合并）。
-- M4.3 Binary Semaphore / Mutex：完成基础和联合回归。
-- M4.4 Ring Buffer：Empty/Full/Wrap/FIFO 基础测试 PASS；Task ↔ Task SPSC 50,000 元素并发专项 PASS（独立分支 `d93665e`）。
-- M4.5 TIM7 IRQ → Thread Flags → Worker：100 ms 基础链路、用户确认的持续运行和原模块回归 PASS（`adf5d5e`）。
-- M4 Final Integration：临时同机联合实验和 SPSC 专项已通过；仍缺本次 NRST ×3 / Power-cycle ×3 的独立证据、测试 OFF 后正式固件回归、SPSC → M4 PR、合并后的验收及最终 docs checkpoint。
-- M5：未开始，不提前创建采集业务分支。
+- M4 SPSC 并发验证：`d93665e`，经 PR #4 Merge `ccbd176` 合入 M4；M4 关闭文档 `3a8fa13`；PR #5 Merge `e793039` 合入 main。
+- M5-P0 目标运行态：仅 `HeartBeatTask` 和 `UARTTask` 两个应用任务；M4 Queue/Flags/Semaphore/Mutex/ISR 演示任务不再默认创建。Ring Buffer、Debug Logger 保留；`m4_ipc` / `m4_isr` 保留精简接口 / 声明，默认初始化不再调用原实验启动函数。
+- M5-P1 及之后的 ADC/Timer/DMA 采集功能尚未实现，不把 SPSC Task ↔ Task 测试结果直接视为 DMA 数据所有权验证。
 
 ## 当前 Branch 与 Git 基线
 
-- 最新用户确认 Branch：`feature/m4-spsc-concurrency-verification`。
-- 当前 HEAD / origin：`d93665e`：`feat: verify M4 ring buffer SPSC concurrency baseline`；用户确认工作区 clean。
-- 父级 M4 Branch：`feature/m4-rtos-communication-baseline`，最后已知 HEAD / origin 为 `405b9ab`：`docs: record M4 ISR notification baseline verification`。
-- M4.5 功能：`adf5d5e`；Semaphore 恢复：`c4c0721`；Ring Buffer 基础：`f8c3e52`。
-- **尚无证据表明 SPSC → M4 PR 已经合并、M4 → main 已合并或 M4 里程碑已关闭。** 本文档压缩包的新文档提交号仍未产生。
+- Branch：`feature/m5-adc-timer-dma-baseline`。
+- M5-P0 清理前起点：`e793039`（同时对应 main、origin/main 和此分支当时的 HEAD）。
+- 清理前标签：`m5-pre-cleanup-20261028`，此前上传工程归档中检查到；本次未再次核对远程 Tag。
+- 当前代码已经编辑、构建及烧录验证；本次改动和 docs ZIP 尚未得到新的 Commit Hash、Push / clean working tree 的用户确认，不得将 `e793039` 误写为本次清理提交。
 
-## 2026-10-27 M4 Final Integration / SPSC 最新验证快照
+## 2026-10-28 M5-P0 最新验证快照
 
-- 旧实验（临时 `freertos.c`）：Ring Buffer 的 `EMPTY / FULL / FULL READ / WRAP WRITE / WRAP READ` 全部 PASS 后原 Semaphore Release/Acquire、Queue、Task Flags、Mutex、TIM7 IRQ 继续共同运行，用户确认长时间运行通过；此实验中读写按 Thread Flags 阶段分开，**不是**独立 SPSC 并发测试。
-- 新专项：使用 C11 `_Atomic` `head/tail`、acquire/release 内存序、两个独立 Producer/Consumer Task，Ring Buffer 是 `uint32_t buffer[8]`，物理 32 B，有效 7 个元素 / 28 B。
-- 板级实际日志：
-
-```text
-[I][SPSC] START total=50000 capacity=7 elements
-[I][SPSC] PASS sent=50000 recv=50000 full=7064 empty=7419
-[I][SPSC] overflow=7064 elapsedTicks=7501
-[I][SYS] SpscPFree=876 B SpscCFree=444 B
-[I][SYS] M4EvtFree=528 B M4WorkFree=528 B Heap=3432 B MinHeap=3432 B
-[I][SYS] ISRWorkerFree=520 B
-```
-
-- 解释：`full=7064` 是写入失败后保留当前待发送值并重试的次数，和 `overflow=7064` 一致，**不是最终丢弃的数据个数**；`empty=7419` 证明确实出现空缓冲重试，`sent=recv=50000` 且程序完整序号校验 PASS。
-- 同窗口其他 M4 模块继续正常：M4Q `seq=1..40` 连续、M4F Set/Receive、Semaphore Release/Acquire、Mutex +1/+10 共享值、TIM7 到 `irq=70 received=70 errors=0`。
-- 本次 7501 OS ticks 约 7.5 s 的**单次专项压力测试**不等于 M4 Final Baseline 长期运行时长，系统级长期运行窗口与复位仍需独立证据。
-- CMake `M4_ENABLE_SPSC_TEST` 默认 OFF，但 CMake Cache 可能保留之前 ON；关闭时必须显式 `-DM4_ENABLE_SPSC_TEST=OFF`，重新配置、Clean Build、烧录并确认无 `[SPSC] START`。
-- 本轮证明的是 Task ↔ Task SPSC，不宣称 ISR ↔ Task Ring Buffer、DMA Ownership、MPSC / MPMC 或极限最坏延迟安全。
+- `.ioc` 的 6 个应用任务减少为 2 个，移除 `SyncSem` 和 `SharedDataMutex`；`freertos.c` 删除演示 Task/变量，并去掉 `M4Ipc_Init()`、`M4ISR_Init()` 的默认调用；保留条件 SPSC 测试入口。
+- Debug 命令 `cmake --build --preset Debug` 返回成功，输出 `[2/2] Linking`（增量构建）；RAM `21128 B (16.12%)`、Flash `27916 B (2.66%)`、CCMRAM `0`。未提供本轮独立 Clean Build 证据。
+- 清理前 30 秒日志 `882` 行、Heap `3432 B`；清理后 30 秒 `9` 行、Heap/MinHeap `13504 B`；差额 `+10072 B`，减少约 `98.98%` 日志。
+- 清理后 HeartFree `384 B`；UARTFree 初期 `872 B`、后续最低可见 `520 B`。用户实际确认应用 Task 数量为 `2`；30 秒与复位日志未见 M4 演示输出。
+- 用户完成 NRST ×3 和 Power-cycle ×3，均报告输出正常；复位日志偶有 `€` 前缀，后续输出完整，尚不能据此确认为固件 Bug。
+- Git 格式整理：57 个修改文件中的无业务差异 FreeRTOS 文件已恢复；最新所见 11 个修改文件中 7 个有实质内容差异，`git -c core.safecrlf=false diff --check` 无空白错误。最终是否已只剩 7 个文件、是否提交仍待用户提供。
 
 ## 已完成并验证的内容
 
@@ -711,42 +695,36 @@ overflow_count
 
 ## 当前明确未实现
 
-- M4 Final Integration 的**最终关闭程序**：SPSC OFF 正式固件 Clean Build / 烧录回归、NRST ×3、Power-cycle ×3、合并后最终验收和正式 docs checkpoint。
-- SPSC 子分支 → M4 分支的 PR 合并及之后 M4 → main 的 PR 合并，均未收到成功证据。
-- ISR ↔ Task Ring Buffer 数据并发、DMA Buffer Ownership、多个生产者/多个消费者访问、覆盖旧数据策略及高负载最坏延迟。
-- USART2 正式 RX、M5 ADC + Timer + DMA、M6 UART DMA + IDLE、RS485、Modbus、CAN、Bootloader/IAP、Watchdog / Reset Cause 等后续里程碑。
+- M5 ADC Regular Conversion、Timer TRGO 外部触发、DMA Circular Half/Full、FreeRTOS Acquisition/Processing Task、数据所有权和过载检测，均尚未开发。
+- ISR ↔ Task Ring Buffer 真实并发、DMA Buffer Ownership、MPSC/MPMC、最坏采样延迟、长期高负载可靠性，仍为未验证边界。
+- USART2 正式 RX、M6 UART DMA + IDLE、RS485、Modbus、CAN、Bootloader/IAP、Watchdog/Reset Cause 等后续里程碑。
+- 本轮尚未收到 `cmake --build --preset Debug --clean-first`、M5-P0 代码 Commit/Push 与最新 clean working tree 证据；SPSC ON 独立回归不属于本次双任务正式运行验收。
 
-**已实现且不可再列为未完成：** Queue、Task Flags、Semaphore/Mutex、Ring Buffer Basic、TIM7 ISR→Task 基础通知、Task ↔ Task SPSC 50,000 元素专项。
+**已实现且不可再列为未完成：** M4 Queue、Task Flags、Semaphore/Mutex、Ring Buffer Basic、TIM7 ISR→Task 基础通知和 Task ↔ Task SPSC 50,000 元素专项的历史验证；M4 PR 合并与关闭；M5-P0 双任务运行态及 6 次复位的板级验证。
 
 ## 已确认的重要约束
 
-- 硬件外设层采用 STM32 HAL，应用 RTOS 为 CMSIS-RTOS2；TIM6 是 HAL 1 ms Timebase，TIM7 是 M4 ISR 测试 100 ms 中断，SysTick 供 FreeRTOS Tick。
-- TIM7 IRQ priority 5、4 bit preemption grouping 与 FreeRTOS Max Syscall priority 5 已按当前配置核查；ISR 不执行同步 Logger / 阻塞 API。
-- Ring Buffer 当前 `uint32_t` 元素，8 个物理槽/7 个有效槽；`_Atomic` head/tail 的 acquire/release 规则仅在一个 Producer、一个 Consumer 下成立。
-- Full 时拒绝写入并重试是背压模型，`overflow_count` 在本测试中计失败尝试次数，不必然等于丢失业务数据数。
-- Thread Flags 相同 bit 的重复 Set 可以合并，当前 10 Hz `irq==received` 仅是采样事实。
-- 自定义有状态结果 API 优先返回模块专属枚举；查询数值和无返回值回调可保留原有签名。
-- 原 Semaphore 的长期任务职责不可被永久测试代码吞并；SPSC 应使用独立的可选测试模块，正式固件默认关闭。
-- 运行资源必须使用目标板 Stack High Water Mark、Free Heap、Minimum Ever Free Heap 观察，不以 ELF 静态 RAM 替代。
-- CubeMX 代码再生后检查 `.ioc` 与生成代码一致，Git `text eol=lf` 时定向 LF 规范化并审核 Diff。
-- 关闭 M4 前补齐正式固件和本版本复位证据，不提前宣称进入 M5。
+- MCU STM32F407VGT6、HAL + CMSIS-RTOS2；TIM6 是 HAL 1 ms Timebase，SysTick 用于 FreeRTOS Tick。TIM7 曾用于 M4 ISR 10 Hz 实验，目前仍有生成配置，默认程序不再启动该演示链路；M5 选定采样定时器之前先核查资源。
+- `debug_log` 使用任务上下文中的同步 UART 与 Mutex，非 ISR-safe；采集 ISR 中不能直接打印或执行阻塞操作。
+- SPSC Ring Buffer 是 8 个 `uint32_t` 物理槽 / 7 个有效槽；`_Atomic` head/tail 的 acquire/release 只覆盖一个 Task Producer 与一个 Task Consumer，不能自动推广到 DMA 写入的缓冲区。
+- Thread Flags 重复 Set 相同 bit 可以合并；DMA Half/Full 到任务的通知必须设计有界处理和 Buffer Ownership，不能单靠 Flag 假定样本无丢失。
+- 自定义模块函数遵循专属状态码等已接受规范；保留接口应有清晰调用场景，不在正式运行态凭保留接口自动分配无用对象。
+- CubeMX Generate Code 后复核 `.ioc`、`freertos.c`、TIM6/TIM7、CMake 和 Git EOL Diff；不要无审查地覆盖用户代码或暂存第三方文件。
+- Stack / Heap 以实际板级采样为准；ELF 静态 RAM 占用不等于 FreeRTOS 可用 Heap。
 
 ## 当前最新验证情况
 
-- 最新专项：2026-10-27 Task ↔ Task SPSC `PASS sent=50000 recv=50000 full=7064 empty=7419`、`overflow=7064 elapsedTicks=7501`。
-- Full 和 Empty 均实测覆盖，接收校验未发现跳号、错序、重复；范围限于当前固件/配置的一次可见测试。
-- SYS：`SpscPFree=876 B`、`SpscCFree=444 B`、`Heap=MinHeap=3432 B`、`ISRWorkerFree=520 B`；原 Semaphore Stack 288/288 B（本轮 SPSC 版本）。
-- 原 M4 在 SPSC 期间同机运行，Queue seq 连续，Semaphore、Thread Flags、Mutex 正常，TIM7 采样点 `irq=70 received=70 errors=0`。
-- 另有 Ring Buffer 分阶段自检与原同步模块联合长时间运行的用户确认，通过但没有准确末尾时长；不能混同为无阶段同步 SPSC。
-- 新功能 Git `d93665e` 已推送独立分支，用户确认工作区 clean；M4 文档分支最后已知 `405b9ab`，合并尚未确认。
-- **未补证据**：本版本 NRST ×3、Power-cycle ×3，OFF 后正式固件构建/烧录回归、PR 合并后的 M4 最终基线与新 docs 提交。
+- M5-P0 Debug：增量构建 PASS；RAM 21128 B、FLASH 27916 B。
+- M5-P0 UART / 资源：30 秒 `9` 行，`HeartFree=384 B`、`UARTFree` 最低可见 `520 B`、`Heap=MinHeap=13504 B`；旧 M4 版本对照为 882 行和 Heap 3432 B。
+- 应用任务数：用户确认 2；NRST ×3 PASS，Power-cycle ×3 PASS（用户实测报告）。
+- M4 历史 SPSC：`PASS sent=50000 recv=50000 full=7064 empty=7419`，`overflow=7064 elapsedTicks=7501`，Git/PR 历史 `d93665e` → `ccbd176` → `3a8fa13` → `e793039`。
+- Git 尚未收到本次 M5-P0 新提交与推送证据；docs ZIP 不能自动代替 Git 提交。
 
 ## 下一步最合理的一个任务
 
-**先完成 M4 正式固件退出条件与 SPSC 分支合并，再关闭 M4。**
+**先完成 M5-P0 功能和文档的 Git 归档，再启动 ADC 资源配置。**
 
-1. 如尚未完成，在 SPSC 测试 ON 版本补测 NRST ×3 / Power-cycle ×3，并归档 6 次结果；对 PASS 后剩余模块持续运行补充真实终点证据。
-2. 显式执行 `cmake --preset Debug -DM4_ENABLE_SPSC_TEST=OFF`、`cmake --build --preset Debug --clean-first`，烧录并确认没有 `[SPSC] START`，其他 M4 功能和 Stack/Heap 依旧正常。
-3. 在 GitHub 创建 SPSC → M4 PR（Base=`feature/m4-rtos-communication-baseline`，Compare=`feature/m4-spsc-concurrency-verification`），审核 6 个预期源码文件并完成合并。
-4. `git fetch origin`、切换 M4 分支、`git pull --ff-only`，核对合并后的 Git 状态并重新板级回归；把 SPSC / 联合测试记录更新到 `docs/`，建立独立 docs checkpoint。
-5. M4 Final Integration 的关闭条件全部满足后，再 PR 合入 `main`，随后创建 M5 开发分支。不能在 PR 成功前将 M4 写成已完成。
+1. 将此 ZIP 的九份 Markdown 导入原仓库 `docs/`，审查文档与代码 Diff；如果有剩余 EOL-only 文件，确认无需要保留的格式编辑后再定向恢复。
+2. 执行 `git status --short`、`git diff --ignore-space-at-eol --stat`、`git -c core.safecrlf=false diff --check`；如需独立 Clean Build 证据，再运行 `cmake --build --preset Debug --clean-first` 并记录结果。
+3. 精确选择 M5-P0 功能源文件及本次 docs 文件暂存；执行 `git diff --cached --check`、`git diff --cached --stat`，随后 Commit / Push 到 `feature/m5-adc-timer-dma-baseline`，确认状态 clean。
+4. M5-P1 核对 ADC 接线和引脚、定时器 TRGO、DMA Stream/Channel、采样速率与 DMA 半缓冲区所有权；形成资源冲突表和实验验收指标，之后才做 CubeMX 新配置与代码生成。

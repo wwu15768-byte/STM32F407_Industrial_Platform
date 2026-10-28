@@ -928,3 +928,47 @@ M4 关闭前先完成独立分支合并、OFF 正式固件回归与复位测试�
 ### 状态
 
 **Task ↔ Task SPSC 专项 PASS**。其他并发模型尚未验证，M4 总里程碑尚未正式关闭。
+
+
+## KG-013：M5 ADC/Timer/DMA 资源规划、双半缓冲区所有权与实时性预算
+
+### 来源
+
+2026-10-28 完成 M5-P0 的演示任务清理，正式双应用任务运行固件 30 秒 UART / Heap/Stack 与六次复位回归通过；下一步开始 M5 真实周期采样链路。
+
+### 当前理解
+
+- M4 已通过 Queue、Thread Flags、Semaphore/Mutex、TIM7 ISR→Task 与 Task ↔ Task SPSC 的历史实验；这些教学任务不需要常驻 M5 正式固件。
+- 当前实际默认应用任务数为 2，FreeRTOS Free Heap 从 3432 B 提升至 13504 B；同步 UART 日志从 882 行/30 秒下降为 9 行/30 秒，为新采集任务提供了较清楚的资源观测基线。
+- TIM6 当前承担 HAL Timebase，SysTick 属于 FreeRTOS Kernel Tick；TIM7 原 M4 ISR 配置尚待 M5 资源检查，不应直接与 ADC TRGO 争用而不审查。
+- DMA 半缓冲区完成事件和数据所有权不是一回事；如果 Consumer 尚未读取完就被 DMA 环形覆盖，单个 Thread Flag 无法自动保证无丢样。
+
+### 缺少什么
+
+- STM32F407VGT6 可用 ADC 物理引脚、合法输入电压与采样时间的原理图交叉确认。
+- Timer TRGO、ADC Regular 外部触发、DMA Stream/Channel 映射以及 CubeMX/CMake 配置一致性。
+- DMA Circular Half / Full Callback 的 ISR 安全通知、双半缓冲区所有权转移、延迟上界和处理过载/覆盖计数。
+- 采样频率、DMA Buffer 长度、FreeRTOS Task 优先级、UART 日志预算与测试点的量化计算。
+
+### 为什么重要
+
+ADC + DMA 是第一个持续产生真实数据的硬件链路，未明确边界就容易出现样本覆盖、数据遗漏、处理延迟或把实验通过误判为工业实时保障。
+
+### 学习优先级
+
+高。M5-P1 的前置设计任务；在硬件资源与所有权未明确前不开始全链路编码。
+
+### 学习任务
+
+- 根据原理图 / `.ioc` 选择 ADC 输入及外部电压源，明确禁止直接将超过 ADC 允许范围的电压接入 MCU。
+- 制作 Timer/ADC/DMA 资源表，并验证 TIM6 Timebase 不被影响；决定是否需要保留 TIM7 的实验配置。
+- 画出 DMA Circular 双半区、Half/Full 事件、Acquisition Task、Queue、Processing Task 的数据交接和释放时序图。
+- 设计丢样、覆盖、滞后处理、Heap/Stack 和 UART 输出负载的量化验收指标。
+
+### 小实验
+
+待开始：单通道低频 ADC/Timer/DMA 最小闭环，先验证采样值与 Half/Full 回调，再逐步引入 FreeRTOS 消费链与过载测试。本轮未提供 M5 ADC 板级实测。
+
+### 状态
+
+M5-P0 板级基线已经建立；ADC/Timer/DMA 功能和实时性验证尚未开始。此前 KG-011、KG-012 关于 M4 未合并的文字属于 2026-10-27 的历史阶段快照，最新里程碑状态以 `PROJECT_STATUS.md` 和 `SESSION_HANDOFF.md` 为准。

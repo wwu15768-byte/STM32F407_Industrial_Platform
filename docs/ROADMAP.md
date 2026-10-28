@@ -25,8 +25,8 @@
 | M1 | 建立可下载、可运行、可观测的 STM32 裸机 Known Good Baseline | 完成 |
 | M2 | 启动并理解 FreeRTOS 最小系统与调度基础 | 完成 |
 | M3 | 建立线程安全、可裁剪的调试基础设施 | 完成 |
-| M4 | 掌握并实现 RTOS 通信、同步和数据缓冲基础 | 当前 |
-| M5 | 建立 ADC + Timer + DMA 实时数据采集子系统 | 待开始 |
+| M4 | 掌握并实现 RTOS 通信、同步和数据缓冲基础 | 完成 |
+| M5 | 建立 ADC + Timer + DMA 实时数据采集子系统 | 当前（P0 已板级验收，待 Git 归档） |
 | M6 | 实现并验证 UART DMA + IDLE 不定长通信 | 待开始 |
 | M7 | 实现并验证 RS485 半双工通信 | 待开始 |
 | M8 | 实现基础 Modbus RTU 通信 | 待开始 |
@@ -164,18 +164,15 @@
 - `Inc/debug_log.h`、`Src/debug_log.c` 和统一日志调用路径。
 - M3 功能 checkpoint、测试记录、决策记录和资源成本记录。
 
-## M4：RTOS 通信、同步和数据缓冲（当前）
+## M4：RTOS 通信、同步和数据缓冲（完成）
 
-**当前进度校准（2026-10-27）**
+**最新里程碑校准（2026-10-28）**
 
-- M4.1 Queue、M4.2 Task Thread Flags、M4.3 Binary Semaphore / Mutex、M4.4 Ring Buffer Basic 均已完成既定基础实验。
-- 2026-10-18 前后完成 Semaphore 从临时 Ring Buffer 测试角色的恢复；功能提交 `c4c0721`。
-- M4.5 TIM7 100 ms IRQ → `osThreadFlagsSet()` → Worker `osThreadFlagsWait()` 已通过首次板级和用户确认的持续运行验证；功能提交 `adf5d5e` 已同步远程。
-- 2026-10-27 已完成 Ring Buffer Task ↔ Task SPSC 并发专项：50,000 个 `uint32_t` 顺序校验 PASS；Full=7064、Empty=7419，`overflow=7064`，耗时 7501 OS ticks。采用 C11 原子 head/tail 的 acquire/release，数据有效容量为 7 个元素 / 28 B。
-- SPSC 专项功能提交 `d93665e` 已推送独立 `feature/m4-spsc-concurrency-verification`，父级 M4 Branch 已知 `405b9ab`；PR 合并状态尚未确认。
-- M4 原先临时 Ring Buffer 自检 + 原 M4 通信模块在同一固件上联合运行、用户确认持续运行通过；与真正 SPSC 压力测试区分记录。
-- 当前 M4 **尚未正式关闭**：仍需补充 SPSC OFF 正式固件构建/烧录回归、最终 NRST ×3 / Power-cycle ×3、合并后验证及文档 checkpoint。
-- Task ↔ Task SPSC 已验证；**ISR ↔ Task Ring Buffer、DMA 数据所有权、多生产者访问**仍属于未验证边界。
+- M4.1 Queue、M4.2 Task Thread Flags、M4.3 Binary Semaphore / Mutex、M4.4 Ring Buffer Basic 和 M4.5 TIM7 ISR → Task 均完成历史板级实验；`adf5d5e` 为 ISR 功能提交。
+- 2026-10-27 独立 Task ↔ Task SPSC 专项传输 50,000 个 `uint32_t` 全部 PASS；Full=7064、Empty=7419，`overflow=7064`，7501 OS ticks；有效容量 7 元素 / 28 B，不等于 DMA 并发已经验证。
+- SPSC 功能提交 `d93665e` 经 PR #4 合并（`ccbd176`），M4 关闭文档 `3a8fa13`，经 PR #5 合并 main（`e793039`）；**M4 已正式合并并关闭**。
+- M4 的实验任务和任务间对象是历史学习与验证资源，2026-10-28 M5-P0 已将其从默认固件清理，历史提交仍可追溯。
+- DMA Buffer Ownership、ISR ↔ Task 数据通道、多生产者并发与高负载最坏延迟仍属 M5 后续未验证范围。
 
 **Goal**
 
@@ -212,7 +209,14 @@
 - 最小 Queue、Notification、Semaphore 和 Ring Buffer 实验代码；可选构建的 `m4_spsc_test` 专项压力测试代码。
 - 并发机制选择说明、数据所有权说明和 M4 测试记录；SPSC 原子内存序、可见性和 Full 重试计数语义记录。
 
-## M5：ADC + Timer + DMA 数据采集子系统
+## M5：ADC + Timer + DMA 数据采集子系统（当前）
+
+**当前进度校准（2026-10-28）**
+
+- M5-P0 运行时任务与日志清理已完成 Debug 增量构建、30 秒 UART 与 Heap/Stack 观测、NRST ×3、Power-cycle ×3 板级回归；仅保留 HeartBeat 和 UART 两个默认应用任务。
+- 清理前后 UART 30 秒 882 → 9 行；FreeRTOS Free Heap 3432 → 13504 B；尚未形成 M5-P0 功能与文档的新 Commit / Push。
+- M5-P1 开始之前须完成 Git 归档与 ADC/Timer/DMA 资源分配表。**M5 的 ADC、Timer 触发、DMA 和采集任务均尚未实现。**
+
 
 **Goal**
 

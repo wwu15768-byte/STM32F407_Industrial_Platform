@@ -1948,3 +1948,85 @@ Heap=3432 B        MinHeap=3432 B
   3. 烧录正式固件，确保不出现 `[SPSC] START`，Queue/Flags/Semaphore/Mutex/TIM7 ISR 正常，记录新的 Stack / Heap。
   4. 审查 SPSC 分支的六个文件并经 PR 合入 M4；更新本地 M4 分支，再 clean build / 板级回归。
   5. 整理文档与 Git checkpoint，待 M4 关闭验收确实完成后再通过 PR 合入 main。
+
+
+## TEST-20261028-01：M5-P0 清理前后 30 秒 UART 与 FreeRTOS 资源对比
+
+- 目标：验证移除 M4 演示任务后，正式 UART 输出量和 FreeRTOS 动态 Heap 占用确实下降，并保存可复核的前后对比。
+- 硬件与环境：STM32F407VGT6 + FreeRTOS/CMSIS-RTOS2；USART2 同步日志；清理前 Git 起点 `e793039`，M5 分支 `feature/m5-adc-timer-dma-baseline`。
+- 方法：清理前后分别采集约 30 秒 USART2 日志，读取 `osThreadGetStackSpace()`、`xPortGetFreeHeapSize()` 和 `xPortGetMinimumEverFreeHeapSize()`；不将 ELF RAM 大小误记为 FreeRTOS Heap。
+- 清理前日志证据（2026-10-28 用户提供的原始 30 秒记录，882 行）：
+
+```text
+[I][M4Q] rx seq=1 value=10 tick=1 count=0
+[I][M4ISR] TIM7 started
+[I][SPSC] START total=50000 capacity=7 elements
+[I][SPSC] PASS sent=50000 recv=50000 full=7064 empty=7419
+[I][SYS] HeartFree=384 B UARTFree=480 B M4ProdFree=808 B M4ConsFree=496 B
+[I][SYS] M4EvtFree=528 B M4WorkFree=528 B Heap=3432 B MinHeap=3432 B
+```
+
+- 清理后完整 30 秒日志（用户提供，共 9 行）：
+
+```text
+[I][UART] USART2 TX OK
+[I][SYS] HeartFree=384 B UARTFree=872 B
+[I][SYS] Heap=13504 B MinHeap=13504 B
+[I][UART] USART2 TX OK
+[I][SYS] HeartFree=384 B UARTFree=520 B
+[I][SYS] Heap=13504 B MinHeap=13504 B
+[I][UART] USART2 TX OK
+[I][SYS] HeartFree=384 B UARTFree=520 B
+[I][SYS] Heap=13504 B MinHeap=13504 B
+```
+
+- 对比数据：
+
+| 指标 | 清理前 | 清理后 | 变化 |
+| --- | ---: | ---: | --- |
+| UART 日志行数（约 30 秒） | 882 | 9 | 减少 873 行，约 98.98% |
+| 平均 UART 日志行数/s | 29.4 | 0.3 | 降低约 98.98% |
+| FreeRTOS Current Free Heap | 3432 B | 13504 B | 增加 10072 B |
+| Minimum Ever Free Heap（记录窗口） | 3432 B | 13504 B | 增加 10072 B |
+| HeartBeat 栈剩余 | 384 B | 384 B | 保持一致 |
+| UART 栈剩余 | 480 B（旧窗口） | 最低可见 520 B | 两次不同固件窗口 |
+| M4 演示日志 | 大量存在 | 未出现 | 清理后观测为 0 |
+
+- 任务数量：用户明确确认清理后实际应用任务为 2（`HeartBeatTask`、`UARTTask`）；不把 FreeRTOS Idle / Timer Service Task 混入该数量。
+- 验收：**PASS（30 秒观察窗口）**；输出量显著下降，运行时 Free Heap 增加，系统未出现原 M4 演示日志。
+- 边界：旧固件观察中 `[SPSC] START/PASS` 表明当次烧录的是启动 SPSC 专项的固件；新固件不出现 SPSC 日志仅证明观察窗口未执行该测试，不取代单独的 `ON/OFF` 双配置重建与任务检查；30 秒测试不证明长期内存无泄漏、ADC DMA 实时性或极限负载安全。
+
+## TEST-20261028-02：M5-P0 Debug 构建与生成代码差异审查
+
+- 目标：验证删除实验任务后代码能够编译链接，同时控制 CubeMX 重新生成引起的无关 EOL Diff。
+- 起点：`e793039`，分支 `feature/m5-adc-timer-dma-baseline`；修改范围为 `.ioc`、`freertos.c`、`main.c`、`m4_ipc` 和 `m4_isr` 相关文件。
+- 实际命令：`cmake --build --preset Debug`；构建输出 `[2/2] Linking C executable ...; Generating HEX/BIN files and printing firmware size`，未见编译或链接报错。
+- 固件大小：RAM `21128 B / 128 KB = 16.12%`，FLASH `27916 B / 1 MB = 2.66%`，CCMRAM `0 B / 64 KB`；ELF `text=27812`、`data=96`、`bss=21032`、`dec=48940`。
+- `.ioc` 真实修改：`FREERTOS.Tasks01` 从 6 个应用任务减少至 HeartBeat / UART 两项；移除 `SyncSem` 与 `SharedDataMutex`。
+- Git Diff 审查：CubeMX 生成后曾有 57 个修改文件；恢复第三方 FreeRTOS 源文件和确认的 EOL-only 变化后，用户给出的 `git status --short` 还剩 11 个修改文件；`git diff --ignore-space-at-eol --stat` 显示 7 个文件存在非行尾空白差异（28 行新增 / 938 行删除）；`git -c core.safecrlf=false diff --check` 无输出。
+- TIM6/TIM7：`Inc/tim.h`、`Src/tim.c`、`Src/stm32f4xx_hal_timebase_tim.c` 忽略行尾空白后无 Diff；不能据此宣称 TIM7 `.ioc` 配置已删除，HAL TIM6 时基的最终行为以板级运行回归为补充证据。
+- 验收：**PASS（当前增量 Debug 构建 / 静态 Diff 审查）**。
+- 未覆盖：没有 `--clean-first` 独立构建输出；尚未收到最终仅保留 7 个修改文件的 Git 状态、暂存区审查及功能 Commit / Push 记录。`core.safecrlf=false` 在此仅用于单条 Diff 检查，不作为仓库永久配置调整。
+
+## TEST-20261028-03：M5-P0 双任务正式运行态 NRST 与 Power-cycle 回归
+
+- 目标：确认移除 M4 实验任务后，双应用任务固件可在复位与完全断电后稳定恢复，并持续提供 UART / FreeRTOS 资源监控。
+- 条件：已烧录 M5-P0 清理后的 Debug 固件；USART2 输出 `[UART] USART2 TX OK` 和 `[SYS] HeartFree/UARTFree/Heap/MinHeap`；用户确认实际应用任务数为 2。
+- 测试操作：
+  1. NRST 连续 3 次。
+  2. 完全断电重新上电 Power-cycle 连续 3 次。
+- 提供的重启窗口日志节选：
+
+```text
+[I][UART] USART2 TX OK
+[I][SYS] HeartFree=384 B UARTFree=872 B
+[I][SYS] Heap=13504 B MinHeap=13504 B
+[I][UART] USART2 TX OK
+[I][SYS] HeartFree=384 B UARTFree=520 B
+[I][SYS] Heap=13504 B MinHeap=13504 B
+```
+
+- 运行指标：HeartBeat 栈剩余 384 B；UART 栈高水位日志先出现 872 B、部分后续采样为 520 B；Heap / MinHeap 均为 13504 B。用户确认六次启动输出正常，未报告 M4 演示日志、Hang 或 HardFault。
+- 观察说明：原始粘贴文本个别复位日志前有 `€` 字符，之后 UART 行完整；该现象不足以单独证实固件错误，也没有按六次测试逐次附加完整起止时间戳。不凭片段计算每次上电耗时。
+- 验收：6 次复位/断电回归，不外推为连续长时间工业级可靠性或 DMA 采集验证。
+- Git/归档：功能与文档提交尚无新 Hash；待导入更新文档并执行暂存审核、Commit、Push。

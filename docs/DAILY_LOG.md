@@ -1857,3 +1857,65 @@ MinHeap=4568 B
 ## 明天下一步
 
 办理 M4 → main 合并与 M5 准备。
+
+
+# 2026-10-28
+
+## 今日计划
+
+- 在 M4 已合并的 M5 分支上建立任务与串口清理的可回退基线；让正式运行态不再长期创建 M4 教学实验任务。
+- 删除无业务用途的演示任务、同步对象与关联变量；保留有复用价值的 Ring Buffer、统一 Logger，以及经过整理的 IPC / ISR 接口。
+- 处理 CubeMX 重新生成带来的 CRLF/LF 工作区噪音；完成构建、30 秒串口与资源对比、复位和断电重启回归。
+
+## 实际完成
+
+- 根据用户给出的 Git 输出，`main`、`origin/main` 和 `feature/m5-adc-timer-dma-baseline` 的清理前起点均为 `e793039`（M4 PR #5 Merge）；SPSC → M4 的 PR #4 Merge 为 `ccbd176`，M4 文档关闭提交为 `3a8fa13`。此前检查的工程归档含 `m5-pre-cleanup-20261028` 标签；本次未重新查询远端标签。
+- 修改 `STM32F407_Industrial_Platform.ioc`：移除 `SemProducerTask`、`SemConsumerTask`、`MutexTaskA`、`MutexTaskB`、`SyncSem` 和 `SharedDataMutex`；默认应用任务仅保留 `HeartBeatTask` 与 `UARTTask`。
+- 修改 `Src/freertos.c`：清理原实验任务/变量、移除 `M4Ipc_Init()` 和 `M4ISR_Init()` 的默认调用，保留 `M4_ENABLE_SPSC_TEST` 条件初始化入口；按每 10 次 UART 循环输出一次 Stack/Heap 监控及 UART 状态。
+- 整理 `Inc/m4_ipc.h`、`Src/m4_ipc.c`、`Inc/m4_isr.h`、`Src/m4_isr.c` 的实验遗留代码；保留部分接口与外部声明，正式模式不再默认创建这些演示任务或启动对应实验流程。`Inc/ring_buffer.h` / `Src/ring_buffer.c`、`debug_log` 模块继续保留。
+- 将 `Src/main.c` 的 `m4_isr.h` 引入调整至 USER CODE 区；实际 Timer 源文件在忽略行尾空白后无语义 Diff。`.ioc` 仍有原 TIM7 资源配置，后续 M5 资源规划时复核，不据此认为 TIM7 已完全释放。
+- CubeMX 再生成曾造成 Git 57 个修改文件；通过审核 `git diff --ignore-space-at-eol`、恢复已确认的第三方与 EOL-only 文件后，用户提供的状态为 11 个修改文件，其中 7 个存在非行尾空白差异。`git -c core.safecrlf=false diff --check` 无空白错误输出；后续建议恢复其余 4 个 EOL-only 文件，但未收到操作后的最终 `git status`。
+- Debug 增量构建命令 `cmake --build --preset Debug` 成功链接并生成 ELF/HEX/BIN；固件占用 RAM 21128 B（16.12%）、FLASH 27916 B（2.66%），CCMRAM 0 B。
+- 在真实开发板上完成清理后 30 秒 USART2 监控：仅 9 行，原 M4 实验日志为 0；用户确认实际应用任务数量为 2。
+- 用户确认本次固件 NRST ×3、完全断电重新上电 Power-cycle ×3 均正常，提供了重启后的 UART / Heap / Stack 日志片段。
+
+## 验收情况
+
+- Debug 增量构建：**PASS**；本轮未提供 `--clean-first` 的独立构建记录。
+- 30 秒 UART：清理前 882 行 → 清理后 9 行，减少 873 行 / 约 98.98%；清理前多模块实验输出已不再出现。
+- FreeRTOS Free Heap：3432 B → 13504 B，增加 10072 B；清理后 Current/Minimum Ever Free Heap 均为 13504 B（提供的观测窗口）。
+- HeartBeat Task Stack Free：384 B；UART Task Stack Free：首次可见 872 B、后续最低观测 520 B（高水位统计，不能仅根据首次数值判断余量）。
+- 应用任务数：2。
+- 重启后的 UART 日志有个别 `€` 前缀，后续日志保持正确；尚不能仅凭此判断为固件缺陷，若正常运行中复现需检查串口接收与解码。
+
+## 未完成
+
+- 把本次文档包导入本地 `docs/` 并核查 Diff；M5-P0 功能修改和文档尚未得到新的 Git Commit / Push 确认。
+- 核对最终工作区是否只剩预期源码及 `.ioc` 修改；尚缺提交后的 `git status`、远程同步证据。
+- M5 资源规划、ADC/Timer/DMA 驱动与实时采集链尚未开始；专项 `M4_ENABLE_SPSC_TEST=ON` 重新回归、最新固件独立 Clean Build 未在本轮提供证据。
+
+## 今日 Bug
+
+- CubeMX 再次引起 CRLF/LF 工作区噪音；已按实际内容差异识别并定向恢复无业务差异的文件，未观察到新的固件运行故障。
+- 重启输出偶见 `€` 前缀，证据不足以确认为固件 Bug；保留为后续如复现则排查的现象。
+
+## 今日学习
+
+- 通过 Git Tag / 历史保存教学实验，正式运行固件只创建必要任务；关闭日志不能替代回收任务 Stack、TCB、同步对象和调度开销。
+- FreeRTOS Heap 可用空间与 ELF 静态 RAM 占用不是同一指标；栈历史最小余量会随执行路径变化。
+- 审核 `.ioc`、用户代码、CMake 与实际固件行为必须交叉验证，不能仅根据串口安静判断任务确实被删除。
+
+## 尚未理解
+
+- M5 ADC 采样时钟、Timer TRGO、DMA Stream/Channel 的资源配对，以及 Half/Full 回调的数据所有权、消费速度和丢样/覆盖检测策略。
+- SPSC 的 Task ↔ Task 测试结论不能直接外推到 DMA 写入同一 Buffer 的场景。
+
+## Git
+
+- 当前开发分支：`feature/m5-adc-timer-dma-baseline`；本次修改前 HEAD / main / origin main 均为 `e793039`。
+- 清理前基线标签：`m5-pre-cleanup-20261028`（此前工程归档中已见；本次未单独验证远程状态）。
+- 本轮代码和文档仍待用户在本地审查、暂存、提交与推送；**不得填写尚不存在的新 Commit Hash**。
+
+## 明天下一步
+
+导入本次文档 ZIP，审查 `git status` / `git diff` / `git diff --cached --check`，按实际状态建立 M5-P0 功能与文档 checkpoint；随后开始 M5 ADC / Timer / DMA 资源约束与缓冲区所有权设计，不把 M4 实验任务恢复为默认运行态。
