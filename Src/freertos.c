@@ -30,6 +30,9 @@
 #include "m4_ipc.h"
 #include "ring_buffer.h"
 #include "m4_isr.h"
+#include "adc.h"
+#include "tim.h"
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -45,7 +48,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define ADC_FLAG_HALF (1UL << 0)
+#define ADC_FLAG_FULL (1UL << 1)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -55,6 +59,19 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
+#define ADC_BUFFER_SIZE 20U
+
+static uint16_t adc_buffer[ADC_BUFFER_SIZE];
+volatile uint32_t voltage = 0;
+
+volatile uint32_t adc_half_count = 0U;
+volatile uint32_t adc_full_count = 0U;
+volatile uint32_t adc_error_count = 0U;
+volatile uint32_t adc_half_processed = 0U;
+volatile uint32_t adc_full_processed = 0U;
+volatile uint32_t adc_half_tick = 0U;
+volatile uint32_t adc_full_tick = 0U;
+volatile uint32_t adc_late_count = 0U;
 
 /* USER CODE END Variables */
 /* Definitions for HeartBeatTask */
@@ -71,6 +88,13 @@ const osThreadAttr_t UARTTask_attributes = {
   .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+/* Definitions for AcquisitionTask */
+osThreadId_t AcquisitionTaskHandle;
+const osThreadAttr_t AcquisitionTask_attributes = {
+  .name = "AcquisitionTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -79,6 +103,7 @@ const osThreadAttr_t UARTTask_attributes = {
 
 void StartHeartBeatTask(void *argument);
 void StartUARTTask(void *argument);
+void StartAcquisitionTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -119,6 +144,9 @@ void MX_FREERTOS_Init(void) {
   /* creation of UARTTask */
   UARTTaskHandle = osThreadNew(StartUARTTask, NULL, &UARTTask_attributes);
 
+  /* creation of AcquisitionTask */
+  AcquisitionTaskHandle = osThreadNew(StartAcquisitionTask, NULL, &AcquisitionTask_attributes);
+
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
 #if defined(M4_ENABLE_SPSC_TEST)
@@ -131,6 +159,7 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_EVENTS */
   /* add events, ... */
+
   /* USER CODE END RTOS_EVENTS */
 
 }
@@ -196,6 +225,20 @@ void StartUARTTask(void *argument)
          "Heap=%lu B MinHeap=%lu B",
          (unsigned long)heap_free,
          (unsigned long)heap_min_free);
+      LOG_INFO("ADC",
+         "Voltage=%lu mV Error=%lu",
+         (unsigned long)voltage,
+         (unsigned long)adc_error_count);
+
+      LOG_INFO("DMA",
+         "Half=%lu/%lu Full=%lu/%lu",
+         (unsigned long)adc_half_processed,
+         (unsigned long)adc_half_count,
+         (unsigned long)adc_full_processed,
+         (unsigned long)adc_full_count);
+
+      LOG_INFO("DMA", "Late=%lu",
+         (unsigned long)adc_late_count);
 
 #if defined(M4_ENABLE_SPSC_TEST)
       LOG_INFO(
@@ -210,7 +253,121 @@ void StartUARTTask(void *argument)
   /* USER CODE END StartUARTTask */
 }
 
+/* USER CODE BEGIN Header_StartAcquisitionTask */
+/**
+* @brief Function implementing the AcquisitionTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartAcquisitionTask */
+void StartAcquisitionTask(void *argument)
+{
+  /* USER CODE BEGIN StartAcquisitionTask */
+  uint32_t flag;
+  uint32_t sum = 0U;
+  uint32_t adc_average = 0U;
+  if (HAL_ADC_Start_DMA(
+    &hadc1,
+    (uint32_t *)adc_buffer,
+    ADC_BUFFER_SIZE) != HAL_OK)
+  {
+      Error_Handler();
+  }
+
+  if (HAL_TIM_Base_Start(&htim2) != HAL_OK)
+  {
+      Error_Handler();
+  }
+  /* Infinite loop */
+  for(;;)
+  {
+    flag = osThreadFlagsWait(ADC_FLAG_HALF | ADC_FLAG_FULL,
+                                      osFlagsWaitAny,
+                                      osWaitForever);
+
+    if ((flag & osFlagsError) != 0U)
+    {
+        Error_Handler();
+    }
+
+    if ((flag & ADC_FLAG_HALF) != 0U)
+    {
+        if (osKernelGetTickCount() - adc_half_tick >= 200U)
+        {
+            adc_late_count++;
+        }
+        sum = 0U;
+
+        for(int i = 0; i < 10; i++)
+        {
+            sum += adc_buffer[i];
+        }
+        adc_half_processed++;
+
+        adc_average = sum / 10U;
+        voltage = (adc_average * 3300U + 2047U) / 4095U;
+    }
+
+    if ((flag & ADC_FLAG_FULL) != 0U)
+    {
+        if (osKernelGetTickCount() - adc_full_tick >= 200U)
+        {
+            adc_late_count++;
+        }
+        sum = 0U;
+
+        for(int i = 10; i < 20; i++)
+        {
+            sum += adc_buffer[i];
+        }
+        adc_full_processed++;
+
+        adc_average = sum / 10U;
+        voltage = (adc_average * 3300U + 2047U) / 4095U;
+    }
+
+  }
+  /* USER CODE END StartAcquisitionTask */
+}
+
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
+void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc)
+{
+    if(hadc->Instance == ADC1)
+    {
+        adc_half_count++;
+        adc_half_tick = osKernelGetTickCount();
+        if(AcquisitionTaskHandle != NULL)
+        {
+            osThreadFlagsSet(AcquisitionTaskHandle,
+                            ADC_FLAG_HALF);
+        }
+    }
 
+
+}
+
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
+{
+    if (hadc->Instance == ADC1)
+    {
+        adc_full_count++;
+        adc_full_tick = osKernelGetTickCount();
+        if(AcquisitionTaskHandle != NULL)
+        {
+            osThreadFlagsSet(AcquisitionTaskHandle,
+                             ADC_FLAG_FULL);
+        }
+    }
+}
+
+void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *hadc)
+{
+    if (hadc->Instance == ADC1)
+    {
+
+        adc_error_count++;
+    }
+}
 /* USER CODE END Application */
