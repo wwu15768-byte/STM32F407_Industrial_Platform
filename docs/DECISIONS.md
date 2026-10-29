@@ -226,3 +226,27 @@
 - 原因：原正式串口 30 秒内有 882 行（约 29.4 行/s），降低日志负荷有利于定位系统运行状态，并为后续定时采样和吞吐测试降低干扰。
 - 证据：同样约 30 秒窗口的新固件只输出 9 行（约 0.3 行/s）；Current/Minimum Ever Free Heap 均观察为 13504 B，UART 栈最小可见剩余 520 B。
 - 影响与限制：保留错误/告警输出能力；后续 ADC 不应逐样本同步 UART 输出。当前仅完成短时板级验证，未证明采集路径实时性或长期无内存泄漏。
+
+## DEC-20261028-03：M5 采用 TIM2 TRGO 硬件定时触发 ADC1_IN1 + DMA Circular
+
+- 状态：已接受；M5-P1/P2 板级采样与电压变化验证通过。
+- 决策：选用 TIM2 内部计数、TRGO Update 硬件触发 ADC1 Regular Channel 1（PA1），不在 TIM2 更新中断内逐次软件启动 ADC。TIM2 时钟 84 MHz、PSC=8399、ARR=199，设计 50 Hz；单通道 12-bit ADC，Sampling Time 为 84 cycles、ADC 时钟 21 MHz；DMA2 Stream0 外设到内存、Half Word、Circular、FIFO Disabled，缓冲区为 20 个 `uint16_t`。
+- 原因：PA0 同时具有 WKUP 功能，使用 PA1 减少引脚冲突；TIM2 TRGO 是本 MCU ADC 规则转换可用的外部触发路径，减少每个样本的软件定时抖动；DMA 自动写 SRAM 以降低 CPU 搬运负担。
+- 验证：电位器（10 kΩ）从最低到最高端获得 `2～3287 mV` 的有效变化；Half/Full 回调按规律计数，ADC Error 为 0；频率由约 10 秒回调增量核对，不作为精密频率校准。
+- 影响/边界：TIM6 保留 HAL Timebase；DMA buffer 必须放在 DMA 可访问的 SRAM（非 CCMRAM）。当前固定 3300 mV 换算属于估算，未通过外部校准或精确度验收。
+
+## DEC-20261029-01：M5 初版只保留一个采集 Task 与轻量 Thread Flags 通知
+
+- 状态：已接受；正常数据采集功能已实测。
+- 决策：从 M5-P0 的 HeartBeat、UART 双任务状态新增 `AcquisitionTask`（保留当前源码生成命名），在此 Task 启动 ADC DMA 后启动 TIM2；DMA Half/Full 回调仅进行计数、Tick 记录及 `osThreadFlagsSet()`，Task 收到标志后各处理 10 个 ADC 样本并计算平均毫伏值；UART 每约 10 秒打印汇总，不在 ADC/DMA ISR 阻塞打印。
+- 原因：将硬件数据采集与 FreeRTOS 业务处理职责分离，复用 M4 已验证的 Thread Flags 基础，优先打通最小完整采集链，不提前引入 Queue、额外处理任务或复杂软件多缓冲。
+- 验证：正常模式 Half/Full 处理计数与回调计数对齐、Error=0、Late=0；FreeRTOS Heap/MinHeap `12368 B`，LED/UART 正常。
+- 影响/边界：`Thread Flags` 相同 bit 会合并，计数相等与暂时无 Error 都不是逐样本绝对无丢失的证明。若后续确需更强完整性，再按需求增设序号/所有权管理，不在当前已完成功能上盲目扩展。
+
+## DEC-20261029-02：以 0/50/250 Tick 人为延时和 Late 计数验证初步实时性边界
+
+- 状态：已接受；压力注入与恢复验证已完成。
+- 决策：在 `osThreadFlagsWait()` 返回后、读取 DMA 半区前临时加入 `osDelay()`，分别测试 0/50/250 Tick；增加 Callback 与 Processed 独立累计计数，以及基于各半区最近一次回调 Tick 的 Late 指标；测试结束恢复正常采集无人工延时版本。
+- 原因：使用最少改动揭示任务处理及时性与 DMA 硬件运行独立性，不把 ADC Error 当作软件缓存数据完整性结论。
+- 验证：0/50 Tick 时 Late=0；250 Tick 时 Late=`27→57→87`；正常模式恢复后 `Half=73/73 Full=72/72 Late=0 Error=0`。
+- 影响/边界：Late 采用最近回调时间戳，重复通知可能覆盖时间戳；当前结果证明超时检测对人为延时有响应，不能确定准确的覆盖元素数量或证明最大负载无丢失。Tick=毫秒需依据 `configTICK_RATE_HZ` 校准。

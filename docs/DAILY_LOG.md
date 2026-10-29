@@ -1916,6 +1916,70 @@ MinHeap=4568 B
 - 清理前基线标签：`m5-pre-cleanup-20261028`（此前工程归档中已见；本次未单独验证远程状态）。
 - 本轮代码和文档仍待用户在本地审查、暂存、提交与推送；**不得填写尚不存在的新 Commit Hash**。
 
+## 2026-10-28 M5-P1～P4 后续补充（覆盖上方当时的“尚未开始”状态）
+
+- M5-P0 后续已完成两次独立提交并推送：`942fcc3`（`refactor: remove legacy M4 demo tasks and simplify runtime logging`）、`e7f525c`（`docs: record M5-P0 runtime cleanup verification`）；用户确认 `feature/m5-adc-timer-dma-baseline` 与对应 `origin` 同步、工作区 clean。`main` 保持 `e793039`。
+- 使用 10 kΩ 电位器：两固定端连接 3.3 V / GND，滑动端接 PA1 / ADC1_IN1；避免 PA0/WKUP 引脚冲突。ADC1 12-bit、单通道 Regular，TIM2 TRGO Update 上升沿外部触发，ADC 连续转换关闭、DMA 连续请求开启。
+- TIM2 APB1 Timer Clock 84 MHz、PSC=8399、ARR=199，设计采样频率 50 Hz；不经 TIM2 更新 ISR 软件启动 ADC。ADC 时钟按 APB2 84 MHz /4 = 21 MHz 配置，Sampling Time 从 3 cycles 调整至 84 cycles。
+- DMA2 Stream0、Peripheral-to-Memory、Circular、半字宽、内存递增、FIFO 关闭，NVIC Preemption 5 / Sub 0；Buffer 为 `uint16_t[20]`、Half/Full 各 10 个采样。新增 FreeRTOS `AcquisitionTask`，使用 Thread Flags 通知，在 Task 中计算 10 点平均值并按 3300 mV 参考值换算电压；ISR 回调只计数/发通知/记时间，未在 ISR 同步打印 UART。
+- ADC 旋转电位器得到 `2, 612, 1065, 1451, 2250, 2974, 3287, 3285, 3286 mV`；最大端连续三点变化范围 2 mV。未提供万用表同步数据，不能判定绝对测量精度。
+- DMA Half/Full 回调在相邻约 10 秒监控窗口分别 +25 次，`Error=0`；回调与采集任务处理计数对比正常（个别采样瞬间差 1）。
+- 开展 0 / 50 / 250 Tick（按约 1 ms RTOS Tick 口径为 0 / 50 / 250 ms）人为 `osDelay()` 压力测试；250 Tick 放在 `osThreadFlagsWait()` 之后、读取 Buffer 之前。0/50 组 `Late=0`；250 组 `Late=27→57→87`，成功检出处理超时风险，未能证明逐样本真实覆盖或 Flag 丢失数量。
+- 结束压力测试后已恢复无人工延时的正式采集路径；Debug 构建成功（增量链接），RAM `21448 B`（16.36%）、FLASH `35680 B`（3.40%）、CCMRAM `0`；正常回归最后 `Half=73/73 Full=72/72 Late=0 Error=0`，Heap/MinHeap `12368 B`、HeartFree `384 B`、UARTFree 最低可见 `512 B`。
+
 ## 明天下一步
 
-导入本次文档 ZIP，审查 `git status` / `git diff` / `git diff --cached --check`，按实际状态建立 M5-P0 功能与文档 checkpoint；随后开始 M5 ADC / Timer / DMA 资源约束与缓冲区所有权设计，不把 M4 实验任务恢复为默认运行态。
+继续 M5-P5 长时间稳定性和复位回归；按真实测试记录归档并检查 ADC/TIM2/DMA/AcquisitionTask 相关工作区 Diff，生成新的功能与文档 checkpoint。
+
+# 2026-10-29
+
+## 今日计划
+
+- 完成 M5 ADC + TIM2 TRGO + DMA Circular + FreeRTOS 的正常运行回归与稳定性验收。
+- 结束 DMA 延时压力实验，确认正式运行态不残留 `osDelay(250U)`。
+- 将实测结果按既有测试/状态文档格式归档，准备独立的功能与文档提交。
+
+## 实际完成
+
+- 在不额外引入 Queue 或软件双缓冲区的前提下，完成 DMA 回调数与任务处理数对照、超时计数（Late）及人工调度延时对比实验。
+- A 组 0 Tick：最后 `Half=73/73 Full=72/72 Late=0 Error=0`；B 组 50 Tick：最后 `Half=72/73 Full=72/72 Late=0 Error=0`；C 组 250 Tick：最后 `Half=72/73 Full=71/72 Late=87 Error=0`，Late 观测值依次为 27、57、87。
+- 人为延时已移除，恢复常规读取流程；再次增量构建 Debug 成功，LED/UART 正常，正常运行最后采样 `Half=73/73 Full=72/72 Late=0 Error=0`，平均电压约 3284～3288 mV。
+- 用户确认本次正式采集固件长时间运行测试通过，NRST ×3 和完全断电重新上电 Power-cycle ×3 均通过；实际长时间测试的起止时刻与分钟数未提供，文档不虚构具体持续时间。
+
+## 验收情况
+
+- 最终已提供构建：`cmake --build --preset Debug`，输出 `[2/2] Linking`；RAM `21448 B (16.36%)`、FLASH `35680 B (3.40%)`、CCMRAM `0 B`。
+- 当前 FreeRTOS Heap/MinHeap 观测均为 `12368 B`，HeartFree `384 B`、UARTFree 最低可见 `512 B`；观测期间无持续下降。
+- 低负载与 50 Tick 延时：Late 均为 0；250 Tick 延时：Late 持续增长且 ADC Error 仍为 0，验证了软件处理超时检测的有效性，而非证明 ADC 硬件故障。
+- 恢复正常运行后 Half/Full 回调数与已处理数一致，Late/Error 均为 0；长时间运行和 6 次复位由用户确认 PASS。
+- M5-P1～P5 的**既定基础功能与初步可靠性实验**已完成；样本级无丢失、最坏调度延迟与工业精度标定不属于本次已验证结论。
+
+## 未完成
+
+- 尚未收到本次 ADC + TIM2 + DMA 功能代码的新 Git Commit/Push、最新 `git status`、暂存区 Diff 或 `--clean-first` 构建证据；不要将本次 docs ZIP 视为已提交。
+- 长时间运行具体时长、精密频率测量和外部万用表/校准源电压精度对照未提供。
+- DMA Circular 覆盖的逐样本证明、Thread Flags 合并时的严格无丢块保证和最坏响应时间专项未完成；未来按真实需求再扩展。
+
+## 今日 Bug
+
+- 无已确认的新固件 Bug；250 Tick 人为延时引起 `Late` 增长是预期压力注入结果，不作为正常固件缺陷。
+
+## 今日学习
+
+- DMA Circular 缓冲区即使不越界，也可能在任务晚读时被覆盖；ADC `Error=0` 不等于无数据丢失。
+- Half/Full 回调计数与任务处理计数可检查处理积压，但差 1 次可能只是 UART 读取状态的时间边界；计数相等不能严格证明原样本未覆盖。
+- Tick 时间戳的简化超时统计在通知合并/时间戳更新情况下可能漏报；阶段性验收需明确边界。
+
+## 尚未理解
+
+- 如何以尽量小的代价做 DMA 半区所有权或逐块序号追踪，并量化最坏调度延迟；见 `KG-013` / `KG-014`。
+- ADC 绝对精度、VREF 误差、采样源阻抗和完整工业级信号调理留待后续实际需求。
+
+## Git
+
+- 已知上一次确认干净且同步的 M5 开发分支 HEAD 为 `e7f525c`；上一功能重构提交为 `942fcc3`，主分支仍为 `e793039`。
+- 本次 ADC/Timer/DMA 新开发已有板级运行证据，但**本轮功能代码与新文档尚未提交/推送**，不虚构新 Commit Hash。
+
+## 明天下一步
+
+先保存稳定运行的代码快照，执行 `git status --short`、`git diff --ignore-space-at-eol --stat`、`git diff --check`；复核 `.ioc` 与新增生成代码、确认无压力测试专用延时；按功能提交和测试文档提交分批暂存、审核、Commit/Push，再根据路线图决定是否进入下一里程碑。

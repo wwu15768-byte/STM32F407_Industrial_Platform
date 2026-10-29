@@ -3,38 +3,34 @@
 > 唯一回答：项目现在在哪？
 > 更新时机：项目状态发生明显变化时。
 
-更新时间：2026-10-23
+更新时间：2026-10-29
 
 ## Current Milestone
 
-M4：RTOS 通信、同步和数据缓冲（当前阶段，尚未最终关闭）。M0～M3 已完成。
+M5：ADC + Timer + DMA 实时数据采集子系统。M0～M4 已完成，M5-P0 的功能与文档提交已经推送；M5-P1～P5 **基础采样、FreeRTOS 处理、人工延时测试与用户报告的稳定性/重启回归均已完成**。当前重点是本轮 ADC 功能及测试文档的 Git 归档，不把此功能级验证扩大为工业级绝对无丢样证明。
 
-- M4.1 Queue：完成。
-- M4.2 CMSIS-RTOS2 Thread Flags Task → Task：完成，已验证重复 Flag 合并。
-- M4.3 Binary Semaphore / Mutex：基础验证完成；2026-10-18 前后已恢复 Semaphore 可运行基线并完成回归。
-- M4.4 Ring Buffer：Empty、Full、Wrap-around、FIFO 与溢出计数确定性功能验证完成；并发安全仍未验收。
-- M4.5 TIM7 ISR → Thread Flags → Worker Task：构建、首次板级与用户确认的持续运行验证通过；功能 checkpoint 已提交并推送。
-- M4 Final Integration：待开始，包括模块职责收敛、联合稳定性及重启验收。
-
-M5 ADC + Timer + DMA 尚未开始。
+- M5-P0：运行时任务/日志清理完成、双任务基线验证并归档（`942fcc3`、`e7f525c`）。
+- M5-P1：PA1/ADC1_IN1、TIM2 TRGO Update、DMA2 Stream0 Circular 外设配置完成。
+- M5-P2：50 Hz（设计值）硬件触发、10 kΩ 电位器全量程变化、Half/Full Callback 验证通过。
+- M5-P3：Half/Full Callback/Processed 计数、Late 及 0/50/250 Tick 延时测试完成；250 Tick 成功触发 Late，恢复正常后 Late=0。
+- M5-P4：`AcquisitionTask`接入 Thread Flags 与 10 点平均电压处理，并通过板级正常模式验证。
+- M5-P5：用户确认长时间运行、NRST ×3、Power-cycle ×3 均正常；实际长时间测试的具体时长未提供。
 
 ## Current Goal
 
-完成 M4.5 文档与测试证据同步，并推进 M4 Final Integration。已完成的 M4.5 最小链路为：
+保存并归档已通过基本验收的 M5 ADC 采集版本，核对生成代码、项目配置和 Git 变更；准备单独的 ADC 功能 Commit 与测试文档 Commit。当前最小已实测链路：
 
 ```text
-TIM7 100 ms Update IRQ
-  -> TIM7_IRQHandler()
-  -> HAL_TIM_PeriodElapsedCallback() / TIM7 分支
-  -> M4ISR_OnTim7ElapsedFromISR() / osThreadFlagsSet()
-  -> M4IsrWorkerTask / osThreadFlagsWait(osWaitForever)
+TIM2 TRGO Update (84 MHz; PSC=8399; ARR=199; nominal 50 Hz)
+  -> ADC1_IN1 / PA1 (12-bit, 84 cycles sampling)
+  -> DMA2 Stream0 Circular (uint16_t[20], halves of 10)
+  -> HAL_ADC_ConvHalfCpltCallback / HAL_ADC_ConvCpltCallback
+  -> osThreadFlagsSet(HAL ADC callback context)
+  -> AcquisitionTask / osThreadFlagsWait
+  -> 10-sample average -> voltage (mV) -> UARTTask summary
 ```
 
-TIM6 继续独立作为 HAL 1 ms Timebase；回调中的 `HAL_IncTick()` 只由 TIM6 分支调用。TIM7 NVIC 抢占优先级为 5，FreeRTOS 最大可调用系统 API 的数值优先级阈值为 5（4 bits 抢占优先级）。
-
-当前不应把低负载下 `irq == received` 当作高负载无损计数保证；同一个 Thread Flag bit 允许合并。ISR 内不调用同步 `LOG_xxx()` 或阻塞接口，正式的采样数据所有权留待后续专项设计。
-
-M4 最终关闭前还须按最新 `ring_buffer.h` 核对 Ring Buffer 数据元素类型、字节容量与历史文档记载不一致的问题；当前仍不宣称 Ring Buffer ISR/Task 并发安全。
+ISR 中不进行阻塞 UART 输出；TIM6 继续承担 HAL Timebase，SysTick 用于 FreeRTOS Tick。`Error=0` 与处理计数匹配只能支持本次观测窗口的基础行为，不构成逐样本完整性证明。
 
 ## Completed
 
@@ -297,84 +293,53 @@ M4 最终关闭前还须按最新 `ring_buffer.h` 核对 Ring Buffer 数据元�
 - M4.5 独立功能 checkpoint：`adf5d5e`，已推送远程；用户确认本地分支 clean。
 - M4 最终验证已通过。
 
+- 2026-10-28 M5-P0 Git 归档完成并远程同步：功能 `942fcc3`，文档 `e7f525c`；上一次确认的干净 HEAD 为 `e7f525c`，main 仍为 `e793039`。
+- M5 新增 ADC1_IN1（PA1，10 kΩ 电位器）、TIM2 TRGO（84 MHz / 8399 / 199 = 50 Hz 设计值）、DMA2 Stream0 Circular（20×`uint16_t`），利用 Half/Full Callback 与 FreeRTOS `AcquisitionTask` 进行 10 点平均电压估算。
+- 板级电压范围 `2～3287 mV`、最大端稳定测得 3287/3285/3286 mV，尚无万用表校准证据。
+- DMA 回调与 Task Processed 计数对照：0、50 Tick 延时 Late=0；250 Tick 压力注入 Late=27→57→87，检测到超时风险；恢复正常后 Half=73/73、Full=72/72、Late=0、Error=0。
+- 最新 Debug 增量构建成功（RAM 21448 B / 16.36%，FLASH 35680 B / 3.40%，CCMRAM 0），Heap/MinHeap=12368 B，HeartFree=384 B，UARTFree 最低可见 512 B。
+- 用户确认当前 M5 采集固件长时间运行与 NRST ×3、Power-cycle ×3 均通过；时长未量化，不推断长期极端负载下逐样本无损。
+
 ## In Progress
 
-- M4.1～M4.5 的基础功能及指定实验已完成；M4.5 测试记录和文档收尾正在处理。
-- 下一任务：M4 Final Integration，验证所有保留的正式通信机制在同一当前固件中的职责边界和联合运行。
-- 进一步确定 Ring Buffer 的保留测试模式与元素类型；测试逻辑不能占用正式 Semaphore 任务。
-- 对 Queue、Thread Flags、Semaphore、Mutex、Ring Buffer 基本功能和 TIM7 ISR 通知进行完整回归，记录完整构建资源、Stack / Heap、长期稳定性以及 NRST ×3 / 断电重启 ×3。
-- 再决定是否关闭 M4，不能直接将 2026-10-20 的 M4.5 通过等同于 M4 Final Integration 完成。
+- 本次 M5 ADC/TIM2/DMA 功能版本与测试文档尚未收到最终 Git Diff、Commit/Push 和新 HEAD 的用户确认；准备审查并归档。
+- 独立 `--clean-first` 构建、准确长时间运行时长、逐块缓冲区覆盖检测及精密 ADC 标定/频率测量尚未提供，按风险与未来专项需求处理；不把本轮既定基础功能回归重新判为失败。
 
 ## Blocked
 
-当前无已确认的外部阻塞。M4 Final Integration 所需的最终联合回归与重启测试尚待执行。
+当前没有已确认的外部硬件或工具阻塞；Git 审核与文档提交属于尚待完成的归档工作。
 
 ## Known Bugs
 
-当前日志中无已确认且尚未解决的固件运行 Bug。
-
-- M4.1 Queue Producer 历史 Stack 不足、M4.3 同步任务 Stack 余量不足，已在既有 checkpoint 调优。
-- M4.4 Ring Buffer Consumer 曾因未检查读取返回状态重复打印旧值，已修复并有确定性测试记录。
-- CubeMX Generate Code 曾将 LF 工作区文件改为 CRLF，导致大量 Git 工作区噪声；已用字节级定向 CRLF → LF 方式恢复，仍属于每次重新生成后要检查的开发流程风险。
-- TIM7 早期生成的 ARR 为 9，与目标 999 不一致；随后确认 `.ioc` 为 `TIM7.Period=999`、重新生成的 `Src/tim.c` 为 999，已解决。
-- Ring Buffer 文档的数据类型/字节容量与先前上传的源码快照不一致，属于待复核的文档一致性问题，而非已证实的运行 Bug。
-- Ring Buffer SPSC 并发安全、ISR/Task 共享数据以及 DMA Ownership 均未验证；不是当前 M4.5 已完成能力。
-- 当前同步 `LOG_xxx()` 不是 ISR-safe。
+- 当前 M5 ADC 正式采集日志未报告已确认且未解决的固件运行 Bug，`ADC Error=0`、`Late=0` 只代表给定窗口内未观察到对应错误。
+- 250 Tick 延时出现 Late=27→57→87，为故意压力测试下的预期超时现象，不判定为默认运行模式故障。
+- CubeMX 生成可能再引入 CRLF/LF 工作区噪音，仍须按 `ERR-20261018-01` 和 `ERR-20261028-01` 的规则逐文件核查。
+- TIM6 HAL Timebase 必须保留；TIM7 历史 M4 配置不等于当前 ADC 触发时钟，现采用 TIM2 TRGO。
+- DMA Circular 旧数据覆盖、Thread Flags 重复通知合并与逐块所有权尚未做严格的最坏场景证明，记录为 `KG-014` 技术边界，不虚构已发生的丢样 Bug。
 
 ## Current Branch
 
-- 当前 Branch：`feature/m4-rtos-communication-baseline`。
-- Upstream：`origin/feature/m4-rtos-communication-baseline`。
-- 最新已确认 HEAD：`adf5d5e`：`feat: establish M4 ISR to task notification baseline`。
-- 本地 `HEAD` 与 `origin/feature/m4-rtos-communication-baseline` 均为 `adf5d5e`，用户提供的 `git status` 为 `nothing to commit, working tree clean`。
-- Semaphore 恢复：`c4c0721`：`fix: restore M4 semaphore task baseline`。
-- Ring Buffer 文档：`5b0240b`：`docs: record M4 ring buffer baseline verification`。
-- Ring Buffer 功能：`f8c3e52`；M4 同步文档：`5c9efac`；Stack 调优：`c84fed8`；Mutex：`c5bc54a`；Semaphore：`435ba4f`。
-- M4.5 功能提交已同步远程；**此 ZIP 的文档更新尚未应用到本地仓库、未提交或推送**，不得假设出现新的 docs commit。
+- 当前开发分支：`feature/m5-adc-timer-dma-baseline`。
+- 最后一次用户实际确认同步且工作区 clean 的 Git HEAD：`e7f525c`（M5-P0 文档），其父级功能提交 `942fcc3`；当时 `origin/feature/m5-adc-timer-dma-baseline` 亦为 `e7f525c`。
+- main 与 `origin/main` 在最后确认时均为 `e793039`，标签 `m5-pre-cleanup-20261028` 指向该清理前基线。
+- **M5 ADC/TIM2/DMA 当前功能代码已构建、烧录和测试，但尚未收到本轮新 Git Commit/Push、最终工作区 clean 的终端证据**；不虚构新 Hash，也不把 M5 功能误记为已合并 main。
 
 ## Last Verified Function
 
-当前最新功能验收：M4.5 TIM7 ISR → Thread Flags → Worker Task。
+最新验收：**M5 ADC1_IN1 + TIM2 TRGO + DMA2 Circular + FreeRTOS 采集链基础功能与用户报告的稳定性/复位回归**。
 
-- TIM7 配置：输入定时器时钟 84 MHz，PSC=8399，ARR=999，预期 100 ms / 10 Hz。
-- 优先级：TIM7 NVIC Preemption=5，`configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY=5`，`configPRIO_BITS=4`，NVIC Grouping 为 4 bits 抢占优先级。
-- TIM6 HAL 1 ms Timebase 不受 TIM7 回调影响：`HAL_IncTick()` 仅 TIM6 分支执行。
-- M4.5 真实日志采样：
-
-```text
-[I][M4ISR] irq=30 received=30 errors=0
-[I][M4ISR] irq=40 received=40 errors=0
-[I][M4ISR] irq=50 received=50 errors=0
-[I][M4ISR] irq=60 received=60 errors=0
-```
-
-- 当前低负载窗口各采样点相等；不推断高负载时 Thread Flags 不会合并事件。
-- 原 Queue 的日志 `seq=12..31` 连续、`value = seq × 10`、`count=0`；Semaphore 持续释放/获取；Mutex 临界区 `seq=3..6`、共享值连续；原 M4F Set/Receive 对应；UART 正常。
-- M4ISR 与原 M4 基线联合运行期间的资源采样：
-
-```text
-HeartFree=384 B     UARTFree=480 B
-M4ProdFree=808 B    M4ConsFree=496 B
-M4EvtFree=528 B     M4WorkFree=528 B
-SemProFree=288 B    SemConFree=288 B
-MutexAFree=520 B   MutexBFree=520 B
-ISRWorkerFree=520 B
-Heap=3432 B        MinHeap=3432 B
-```
-
-- 与添加 M4ISR Worker 前的 `Heap=4568 B` 相比，运行时当前 Free Heap 减少 1136 B；Worker 配置 Stack 1024 B。
-- 本阶段的干净构建记录：FLASH 34748 B（3.31%），RAM 21192 B（16.17%）；不等同于动态 Heap 使用。
-- 用户随后确认持续运行测试均通过；本次提供的材料没有附上最终结束时间/完整末尾计数，不虚构具体分钟数或最终 IRQ 总数。
-- 没有证据表明本次进行了 **M4 Final Integration** 所需的 NRST ×3 / Power-cycle ×3、Ring Buffer SPSC 并发压力测试。
-- 最新确认功能提交：`adf5d5e`，并已推送远程。
+- 模拟输入：PA1 / ADC1_IN1，10 kΩ 电位器；电压逐步变化 `2, 612, 1065, 1451, 2250, 2974, 3287, 3285, 3286 mV`；结果为基于 3300 mV 假定参考值的估算，未做万用表准确度对照。
+- 采样：TIM2 PSC=8399、ARR=199，APB1 Timer Clock 84 MHz，设计 50 Hz；ADC1 12-bit、Sampling Time=84 cycles、External Trigger=TIM2 TRGO Rising；DMA2 Stream0 Circular、20 元素 / 每半区 10 元素。
+- 正式运行前后计数：最后 `Half=23/23→48/48→73/73`、`Full=22/22→47/47→72/72`，均为 Processed/Callback，`Late=0`、`Error=0`；约 10 秒间相同回调计数增加 25，符合设计级频率核对但非精密标定。
+- 人工延时：A 0 Tick Late=0；B 50 Tick Late=0（Half 最后 72/73）；C 250 Tick Late=27、57、87（最后 Half=72/73、Full=71/72）。延时放在 Wait 返回和读取 DMA Buffer 之间，可暴露晚读风险；这不等于已证明覆盖了多少原始样本。
+- 最新 Debug 构建 `cmake --build --preset Debug` 成功，RAM 21448 B（16.36%）、Flash 35680 B（3.40%）；动态 Heap/MinHeap 12368 B、HeartFree 384 B、UARTFree 最低可见 512 B；LED/UART 正常。
+- 用户报告长时间运行 PASS、NRST ×3 PASS、Power-cycle ×3 PASS；未提供确切运行时长或完整六次逐次日志。
+- 详细证据：`TEST-20261028-05`、`TEST-20261029-01`～`TEST-20261029-03`；风险边界：`KG-014`。
 
 ## Next Step
 
-1. 将本次 ZIP 中九份 Markdown 文档覆盖/合并回本地 `docs/`，检查 diff 和事实准确性。
-2. 单独提交 M4.5 文档 checkpoint（提交号尚未产生），保留 `adf5d5e` 功能提交不变。
-3. 进入 **M4 Final Integration**：整理临时 Ring Buffer 测试入口，复核实际 `ring_buffer.h` 与文档类型/容量一致性，确定当前正式保留功能。
-4. 完整回归 Queue / Task Flags / Semaphore / Mutex / Ring Buffer Basic / TIM7 ISR → Task；注意 Ring Buffer Basic != SPSC 并发安全。
-5. 记录干净构建、FreeRTOS Stack High Water Mark、Current Free Heap、Minimum Ever Free Heap 和异常路径结果。
-6. 执行 M4 Final Baseline 长时间运行、NRST ×3、完全断电重启 ×3，按真实证据标记通过与否。
-7. 检查 `.ioc` / CubeMX 生成代码与独立用户模块的边界，避免无意义的 CRLF/LF diff；记录 Commit/PR 并准备 M4 关闭。
-8. **M4 关闭前不启动 M5 ADC + Timer + DMA 业务实现**。
+1. 保持当前已经板级通过的无人工延时采集版本，不在归档前做无关优化或加入复杂模块。
+2. 检查 `git status --short`、`git diff --ignore-space-at-eol --stat`、`git diff --check`、`.ioc` / `adc.c` / `dma.c` / `tim.c` / `freertos.c` / CMake 的真实改动，排除 CubeMX EOL-only 噪音。
+3. 可选补做 `cmake --build --preset Debug --clean-first`，若执行需记录真实结果而非提前填写 PASS。
+4. 先审查并提交 ADC/TIM2/DMA/AcquisitionTask 功能代码，再审查并提交本次九份文档；推送 M5 功能分支，确认新 HEAD、upstream 与 clean working tree。
+5. 新任务里程碑由后续计划决定：严格逐块无损保障和绝对精度校准保留为已知边界，后续如果需要再设计，不把基本采样功能重复做一遍。

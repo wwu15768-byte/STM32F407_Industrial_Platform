@@ -1,31 +1,33 @@
 > 当前会话快照；会话切换前整体更新。
-> 更新时间：2026-10-28（M5-P0 板级验收后，Git 功能/文档归档前）。
-> 最新用户确认 Git 基线：`feature/m5-adc-timer-dma-baseline`，清理前 HEAD / main / origin/main 均为 `e793039`（M4 PR #5 Merge）；此前 M4 已关闭并合并。
-> 以下“已完成并验证的内容”中 M0～M4 的 Queue / Semaphore / ISR 等任务结构只描述**当时的历史实验版本**，不代表当前固件仍在创建这些任务；最新运行结构以本页开头及末尾为准。
+> 更新时间：2026-10-29（M5 ADC 采集链及用户报告的长时间/复位回归通过，当前功能与文档 Git 归档前）。
+> 最近一次有终端证据的 Git clean HEAD：`feature/m5-adc-timer-dma-baseline` @ `e7f525c`（M5-P0 已推送）；M5 新功能尚未收到新的 Git HEAD/Push 输出。
+> 以下长篇 M0～M4 历史实验段落中写“当前结构”的内容，仅代表**该实验当时的代码结构**，不代表今天默认固件中仍创建对应演示任务。实时状态以本段和文件末尾为准。
 
 ## 当前 Milestone
 
-M5：ADC + Timer + DMA 实时数据采集子系统；当前 M5-P0（清理历史演示任务和日志）**Debug 增量构建、30 秒 UART、NRST ×3、Power-cycle ×3 已通过**，剩余文档导入与 Git Commit/Push。M0～M4 已完成。
+M5：ADC + Timer + DMA 实时数据采集；**P0 已功能/文档归档，P1～P5 基础功能、延时测试与用户报告的长时间及复位回归均完成，剩余本轮 ADC 功能/文档提交**。M0～M4 已完成。
 
-- M4 SPSC 并发验证：`d93665e`，经 PR #4 Merge `ccbd176` 合入 M4；M4 关闭文档 `3a8fa13`；PR #5 Merge `e793039` 合入 main。
-- M5-P0 目标运行态：仅 `HeartBeatTask` 和 `UARTTask` 两个应用任务；M4 Queue/Flags/Semaphore/Mutex/ISR 演示任务不再默认创建。Ring Buffer、Debug Logger 保留；`m4_ipc` / `m4_isr` 保留精简接口 / 声明，默认初始化不再调用原实验启动函数。
-- M5-P1 及之后的 ADC/Timer/DMA 采集功能尚未实现，不把 SPSC Task ↔ Task 测试结果直接视为 DMA 数据所有权验证。
+- M5-P0：从历史 M4 多任务演示清理到仅 `HeartBeatTask` / `UARTTask` 双任务；功能 `942fcc3`、文档 `e7f525c`，已推送。
+- M5-P1：PA1/ADC1_IN1 + 10 kΩ 电位器；TIM2 Update TRGO 50 Hz（设计）、DMA2 Stream0 Circular，替代 M4 期间 TIM7 ISR 实验路径。
+- M5-P2/P4：新增第三个应用任务 `AcquisitionTask`（），完成 DMA Half/Full 回调通知 → 10 点平均 → mV 换算 → UART 摘要；板级电压范围 2～3287 mV。
+- M5-P3：0/50/250 Tick 人为延时对比与 Late 计数完成，250 Tick 触发 Late 27→57→87，正式代码已恢复无人工延时。
+- M5-P5：用户确认长时间运行正常、NRST ×3 和 Power-cycle ×3 均正常，未记录准确时长。
 
 ## 当前 Branch 与 Git 基线
 
-- Branch：`feature/m5-adc-timer-dma-baseline`。
-- M5-P0 清理前起点：`e793039`（同时对应 main、origin/main 和此分支当时的 HEAD）。
-- 清理前标签：`m5-pre-cleanup-20261028`，此前上传工程归档中检查到；本次未再次核对远程 Tag。
-- 当前代码已经编辑、构建及烧录验证；本次改动和 docs ZIP 尚未得到新的 Commit Hash、Push / clean working tree 的用户确认，不得将 `e793039` 误写为本次清理提交。
+- Branch：`feature/m5-adc-timer-dma-baseline`，最近一次用户确认与 `origin/feature/m5-adc-timer-dma-baseline` 同步且工作区 clean 的 HEAD=`e7f525c`。
+- M5-P0 功能提交=`942fcc3`；文档提交=`e7f525c`；清理前标签=`m5-pre-cleanup-20261028`，`main` / `origin/main` 最近确认仍为 `e793039`。
+- 当前 ADC/TIM2/DMA 版本已构建/烧录/实机回归，但最新代码 Diff、暂存区、Commit/Push 尚待确认；不要虚构 ADC 功能提交 Hash，也不要宣称新功能已合入 main。
 
-## 2026-10-28 M5-P0 最新验证快照
+## 2026-10-29 M5-P1～P5 最新验证快照
 
-- `.ioc` 的 6 个应用任务减少为 2 个，移除 `SyncSem` 和 `SharedDataMutex`；`freertos.c` 删除演示 Task/变量，并去掉 `M4Ipc_Init()`、`M4ISR_Init()` 的默认调用；保留条件 SPSC 测试入口。
-- Debug 命令 `cmake --build --preset Debug` 返回成功，输出 `[2/2] Linking`（增量构建）；RAM `21128 B (16.12%)`、Flash `27916 B (2.66%)`、CCMRAM `0`。未提供本轮独立 Clean Build 证据。
-- 清理前 30 秒日志 `882` 行、Heap `3432 B`；清理后 30 秒 `9` 行、Heap/MinHeap `13504 B`；差额 `+10072 B`，减少约 `98.98%` 日志。
-- 清理后 HeartFree `384 B`；UARTFree 初期 `872 B`、后续最低可见 `520 B`。用户实际确认应用 Task 数量为 `2`；30 秒与复位日志未见 M4 演示输出。
-- 用户完成 NRST ×3 和 Power-cycle ×3，均报告输出正常；复位日志偶有 `€` 前缀，后续输出完整，尚不能据此确认为固件 Bug。
-- Git 格式整理：57 个修改文件中的无业务差异 FreeRTOS 文件已恢复；最新所见 11 个修改文件中 7 个有实质内容差异，`git -c core.safecrlf=false diff --check` 无空白错误。最终是否已只剩 7 个文件、是否提交仍待用户提供。
+- TIM2 时钟 84 MHz、PSC=8399、ARR=199、TRGO Update；ADC1_IN1（PA1）12 bit、21 MHz 时钟、84 cycles 采样时间、TIM2 TRGO Rising 触发；DMA2 Stream0 Circular、20×`uint16_t`（每半区 10 个），默认无 TIM2 ISR 每采样调用。
+- `AcquisitionTask` 启动 ADC DMA 再启动 TIM2；Half/Full Callback 更新计数、设置 Thread Flags 并记录 Tick，任务读取对应半区计算平均毫伏值，UART 约每 10 秒记录摘要。
+- 电位器从最低逐步旋至最高测得 `2, 612, 1065, 1451, 2250, 2974, 3287, 3285, 3286 mV`；没有万用表绝对精度对照。
+- 正常采集计数：`Half=23/23→48/48→73/73`，`Full=22/22→47/47→72/72`（Processed/Callback）；`Late=0 Error=0`，同一种 Callback 每约 10 秒增加 25 次，属于设计级频率核对。
+- A 0 Tick：最后 Half 73/73、Full 72/72、Late 0；B 50 Tick：Half 72/73、Full 72/72、Late 0；C 250 Tick：Half 72/73、Full 71/72、Late 27→57→87。C 组确认超时风险，不证明具体样本覆盖数量。
+- 恢复无延时后重新 Debug 增量构建 PASS，RAM `21448 B (16.36%)`、Flash `35680 B (3.40%)`、CCMRAM `0`；Heap/MinHeap `12368 B`、HeartFree `384 B`、UARTFree 最低可见 `512 B`。
+- 用户确认长时间运行 PASS、NRST ×3 PASS、完全断电 Power-cycle ×3 PASS；未给出运行精确分钟数或长期全量 UART 记录。
 
 ## 已完成并验证的内容
 
@@ -695,36 +697,39 @@ overflow_count
 
 ## 当前明确未实现
 
-- M5 ADC Regular Conversion、Timer TRGO 外部触发、DMA Circular Half/Full、FreeRTOS Acquisition/Processing Task、数据所有权和过载检测，均尚未开发。
-- ISR ↔ Task Ring Buffer 真实并发、DMA Buffer Ownership、MPSC/MPMC、最坏采样延迟、长期高负载可靠性，仍为未验证边界。
+- 严格逐样本/逐半块无丢失证明、DMA Buffer 的完整所有权及覆盖检测、Thread Flags 合并后的精确丢块统计、可量化最坏任务响应时间。
+- ADC 绝对电压精度标定、外部仪器精密采样频率测量、工业传感器信号调理及复杂多通道采样。
+- M5 原路线图中可扩展的独立 Queue → Processing Task 架构尚未引入；本阶段在 `AcquisitionTask` 内完成平均值处理，符合最小功能目标。
 - USART2 正式 RX、M6 UART DMA + IDLE、RS485、Modbus、CAN、Bootloader/IAP、Watchdog/Reset Cause 等后续里程碑。
-- 本轮尚未收到 `cmake --build --preset Debug --clean-first`、M5-P0 代码 Commit/Push 与最新 clean working tree 证据；SPSC ON 独立回归不属于本次双任务正式运行验收。
+- `cmake --build --preset Debug --clean-first` 的独立 Clean Build 和本轮 ADC 新功能 Commit/Push 尚无用户提供的输出。
 
-**已实现且不可再列为未完成：** M4 Queue、Task Flags、Semaphore/Mutex、Ring Buffer Basic、TIM7 ISR→Task 基础通知和 Task ↔ Task SPSC 50,000 元素专项的历史验证；M4 PR 合并与关闭；M5-P0 双任务运行态及 6 次复位的板级验证。
+**已实现且不可再列为未完成：** M4 Queue/Task Flags/Semaphore/Mutex/Ring Buffer/ISR 历史实验、M4 Task↔Task SPSC 50,000 专项、M4 PR 合并、M5-P0 清理并推送、M5 ADC/TIM2/DMA/AcquisitionTask 基础采样与延时/复位回归。
 
 ## 已确认的重要约束
 
-- MCU STM32F407VGT6、HAL + CMSIS-RTOS2；TIM6 是 HAL 1 ms Timebase，SysTick 用于 FreeRTOS Tick。TIM7 曾用于 M4 ISR 10 Hz 实验，目前仍有生成配置，默认程序不再启动该演示链路；M5 选定采样定时器之前先核查资源。
-- `debug_log` 使用任务上下文中的同步 UART 与 Mutex，非 ISR-safe；采集 ISR 中不能直接打印或执行阻塞操作。
-- SPSC Ring Buffer 是 8 个 `uint32_t` 物理槽 / 7 个有效槽；`_Atomic` head/tail 的 acquire/release 只覆盖一个 Task Producer 与一个 Task Consumer，不能自动推广到 DMA 写入的缓冲区。
-- Thread Flags 重复 Set 相同 bit 可以合并；DMA Half/Full 到任务的通知必须设计有界处理和 Buffer Ownership，不能单靠 Flag 假定样本无丢失。
-- 自定义模块函数遵循专属状态码等已接受规范；保留接口应有清晰调用场景，不在正式运行态凭保留接口自动分配无用对象。
-- CubeMX Generate Code 后复核 `.ioc`、`freertos.c`、TIM6/TIM7、CMake 和 Git EOL Diff；不要无审查地覆盖用户代码或暂存第三方文件。
-- Stack / Heap 以实际板级采样为准；ELF 静态 RAM 占用不等于 FreeRTOS 可用 Heap。
+- MCU STM32F407VGT6、HAL + CMSIS-RTOS2；TIM6 是 HAL Timebase、SysTick 为 FreeRTOS Tick；本次 ADC 规则转换由 TIM2 TRGO 硬件触发，旧 TIM7 实验模块不在正式采集主链路中。
+- 当前信号接线为 10 kΩ 电位器滑动端到 PA1/ADC1_IN1，固定端到 3.3 V/GND；不可将 5 V/12 V 直接输入 ADC。
+- `debug_log` 仍是 Task context 的同步 UART + Mutex，非 ISR-safe；ADC/DMA 回调只做轻量处理，不逐样本输出串口。
+- DMA2 Stream0 Circular buffer 20 个 `uint16_t`、前后各 10 个；DMA 可写 SRAM 不等于 CPU 保证能在覆盖前读取。不要将 buffer 放在 CCMRAM。
+- 50 Hz 下两个 Half/Full 事件交替约 200 ms，同一种事件约每 400 ms；Thread Flags 按 bit 合并，计数相等、Late=0、Error=0 仅能支持已有窗口的初步结论。Late 使用最近一次 Callback Tick，在重复事件时有漏报可能。
+- 人为延时压力代码应保持关闭，正式回归版本已恢复无额外 `osDelay(250U)`；必要时才重新开启有意的专项实验。
+- CMake / CubeMX 再生成后要检查 `.ioc`、ADC、DMA、TIM2、`freertos.c`、生成的 CMake 及 CRLF/LF 差异；不直接修改 FreeRTOS 内核或无审查批量提交第三方文件。
+- `M4_ENABLE_SPSC_TEST` 默认 OFF，实验 ON 配置只在需回归 M4 SPSC 时使用。
 
 ## 当前最新验证情况
 
-- M5-P0 Debug：增量构建 PASS；RAM 21128 B、FLASH 27916 B。
-- M5-P0 UART / 资源：30 秒 `9` 行，`HeartFree=384 B`、`UARTFree` 最低可见 `520 B`、`Heap=MinHeap=13504 B`；旧 M4 版本对照为 882 行和 Heap 3432 B。
-- 应用任务数：用户确认 2；NRST ×3 PASS，Power-cycle ×3 PASS（用户实测报告）。
-- M4 历史 SPSC：`PASS sent=50000 recv=50000 full=7064 empty=7419`，`overflow=7064 elapsedTicks=7501`，Git/PR 历史 `d93665e` → `ccbd176` → `3a8fa13` → `e793039`。
-- Git 尚未收到本次 M5-P0 新提交与推送证据；docs ZIP 不能自动代替 Git 提交。
+- M5-P0 Git：`942fcc3` 功能与 `e7f525c` 文档已推送；最后一次确认工作区 clean、分支与远程同步。
+- M5-P1/P2/P4：10 kΩ 电位器 2～3287 mV 全量程变化；TIM2 TRGO / ADC1_IN1 / DMA2 Circular / CMSIS Thread Flags / `AcquisitionTask` 完整主链路实测。
+- M5-P3：0 / 50 Tick `Late=0`，250 Tick `Late=27→57→87`；恢复正常后 `Half=73/73 Full=72/72 Late=0 Error=0`。
+- M5-P5：用户报告长时间运行通过；NRST ×3、Power-cycle ×3 均通过；未提供精确时长、最坏负载时序或逐样本无丢失证据。
+- 最新 Debug 增量构建：RAM 21448 B / 16.36%，Flash 35680 B / 3.40%，Heap/MinHeap 12368 B；`--clean-first` 尚未有独立证据。
+- 证据记录：`TEST-20261028-04/05`、`TEST-20261029-01/02/03`，相关设计 `DEC-20261028-03`、`DEC-20261029-01/02`，知识边界 `KG-014`。
 
 ## 下一步最合理的一个任务
 
-**先完成 M5-P0 功能和文档的 Git 归档，再启动 ADC 资源配置。**
+**完成 M5 本轮 ADC/TIM2/DMA 功能代码与九份项目文档的 Git 归档，不再重复增加基础采样代码。**
 
-1. 将此 ZIP 的九份 Markdown 导入原仓库 `docs/`，审查文档与代码 Diff；如果有剩余 EOL-only 文件，确认无需要保留的格式编辑后再定向恢复。
-2. 执行 `git status --short`、`git diff --ignore-space-at-eol --stat`、`git -c core.safecrlf=false diff --check`；如需独立 Clean Build 证据，再运行 `cmake --build --preset Debug --clean-first` 并记录结果。
-3. 精确选择 M5-P0 功能源文件及本次 docs 文件暂存；执行 `git diff --cached --check`、`git diff --cached --stat`，随后 Commit / Push 到 `feature/m5-adc-timer-dma-baseline`，确认状态 clean。
-4. M5-P1 核对 ADC 接线和引脚、定时器 TRGO、DMA Stream/Channel、采样速率与 DMA 半缓冲区所有权；形成资源冲突表和实验验收指标，之后才做 CubeMX 新配置与代码生成。
+1. 导入本次 docs ZIP，确认是否有覆盖之后仍需保留的本地新改动；审查源码、`.ioc`、CMake 的真实差异和历史 EOL 规范化风险。
+2. 检查 `git status --short`、`git diff --ignore-space-at-eol --stat`、`git diff --check`；可选补做 Debug `--clean-first` 并如实记录。
+3. 按功能文件与 docs 文档分别暂存、`git diff --cached --check`、`git diff --cached --stat`，提交并推送 `feature/m5-adc-timer-dma-baseline`；确认新 HEAD、远程同步与 clean 工作区后再填写新 Commit Hash。
+4. 若无新错误，后续进入下一里程碑准备；严格逐块无损与精度标定留为已知技术边界，避免把暂未验证的能力写成完成。

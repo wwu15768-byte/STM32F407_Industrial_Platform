@@ -26,7 +26,7 @@
 | M2 | 启动并理解 FreeRTOS 最小系统与调度基础 | 完成 |
 | M3 | 建立线程安全、可裁剪的调试基础设施 | 完成 |
 | M4 | 掌握并实现 RTOS 通信、同步和数据缓冲基础 | 完成 |
-| M5 | 建立 ADC + Timer + DMA 实时数据采集子系统 | 当前（P0 已板级验收，待 Git 归档） |
+| M5 | 建立 ADC + Timer + DMA 实时数据采集子系统 | 当前（P0 已提交；P1～P5 基础功能与回归已验收，待本轮 Git 归档） |
 | M6 | 实现并验证 UART DMA + IDLE 不定长通信 | 待开始 |
 | M7 | 实现并验证 RS485 半双工通信 | 待开始 |
 | M8 | 实现基础 Modbus RTU 通信 | 待开始 |
@@ -211,12 +211,14 @@
 
 ## M5：ADC + Timer + DMA 数据采集子系统（当前）
 
-**当前进度校准（2026-10-28）**
+**当前进度校准（2026-10-29）**
 
-- M5-P0 运行时任务与日志清理已完成 Debug 增量构建、30 秒 UART 与 Heap/Stack 观测、NRST ×3、Power-cycle ×3 板级回归；仅保留 HeartBeat 和 UART 两个默认应用任务。
-- 清理前后 UART 30 秒 882 → 9 行；FreeRTOS Free Heap 3432 → 13504 B；尚未形成 M5-P0 功能与文档的新 Commit / Push。
-- M5-P1 开始之前须完成 Git 归档与 ADC/Timer/DMA 资源分配表。**M5 的 ADC、Timer 触发、DMA 和采集任务均尚未实现。**
-
+- M5-P0 运行时任务/日志清理完成并推送独立功能 `942fcc3` 和文档 `e7f525c`，双任务基线 30 秒 UART 882→9 行，Heap 3432→13504 B，NRST ×3 / Power-cycle ×3 已通过。
+- M5-P1：确认 PA1/ADC1_IN1（10 kΩ 电位器）、TIM2 TRGO Update（84 MHz、PSC=8399、ARR=199，50 Hz 设计）、DMA2 Stream0 Circular、20 元素双半缓冲区。
+- M5-P2 / P4：已实现并通过 ADC → DMA Half/Full → `osThreadFlagsSet()` → `AcquisitionTask` → 10 样本平均电压 → UART 的最小真实板级数据链。电压 `2～3287 mV`，无已报告 ADC Error。
+- M5-P3：0/50 Tick 延时 Late=0；250 Tick 延时 Late=`27→57→87`，验证初步处理超时检测有效；恢复无延时版本后 `Half=73/73 Full=72/72 Late=0 Error=0`。
+- M5-P5：用户确认长时间运行 PASS、NRST ×3 和 Power-cycle ×3 PASS（未提供具体时长）。最新增量 Debug 构建 RAM 21448 B、Flash 35680 B、Heap 12368 B。
+- 尚待本轮 ADC 功能与测试文档 Git Commit/Push；**未验证严格逐样本不丢失、极端调度最坏响应时限和电压绝对精度**，不能把初步基线当成最终工业指标。
 
 **Goal**
 
@@ -242,6 +244,8 @@ Timer
   → Queue
   → Processing Task
 ```
+
+> 以上是原 M5 扩展目标链，**不是已实现的全部模块**。2026-10-29 的基础实现暂不使用 Queue / 独立 Processing Task，而是在 `AcquisitionTask` 内完成 10 点均值和毫伏换算；后续如实际业务需要再扩展队列与独立处理任务。
 
 - 具体 ADC 引脚、通道、Timer 和采样参数必须在进入 M5 后根据开发板资源与冲突检查确定，本路线图不预设。
 - 最终采集链路不使用阻塞式轮询。
