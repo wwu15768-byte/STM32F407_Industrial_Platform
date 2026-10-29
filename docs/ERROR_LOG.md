@@ -374,3 +374,80 @@ ARR=9 时周期仅为 1 ms / 1000 Hz；与实验设计不符。
 ### 我学到了什么
 
 `.ioc` 正确并不自动证明工作区的自动生成 C 文件已与其同步；周期应同时通过算式和实测链路核验。
+
+
+## ERR-20261028-01：M5-P0 CubeMX 代码再生成再次造成大量 CRLF/LF Git 噪音
+
+### 日期
+
+2026-10-28。
+
+### 模块
+
+CubeMX Generate Code / Git 工作区 / FreeRTOS 中间件与项目自动生成文件。
+
+### 当前环境
+
+从 `e793039` 开始的 `feature/m5-adc-timer-dma-baseline`，在 `.ioc` 中删除 M4 实验任务和同步对象后重新生成工程；仓库历史采用 LF 规范，CubeMX 在 Windows 下生成了多份 CRLF 工作区文件。
+
+### 问题现象
+
+`git status --short` 曾显示 57 个修改文件，包含大量未主动修改的 FreeRTOS 第三方源码；`git diff --check` 仅连续提示 `CRLF will be replaced by LF`，影响真实功能修改审核。
+
+### 期望行为
+
+Git Diff 仅显示本轮任务删减与接口调整的实际修改，第三方 FreeRTOS 源码和无实质变化的生成文件不进入提交。
+
+### 实际行为
+
+57 个文件先被标记修改；用户恢复第三方 FreeRTOS 内容后，工作区还剩 22 个修改文件；继续审核及恢复 EOL-only 文件后剩 11 个修改文件，其中忽略行尾空白后只有 7 个文件存在内容差异。
+
+### 复现步骤
+
+在 Windows 中使用 CubeMX 重新生成代码，再运行 `git status --short`、`git diff --ignore-space-at-eol --name-only`、`git diff --check`，观察多余文件修改与 EOL 转换警告。
+
+### 已知事实
+
+- `git diff --ignore-space-at-eol --stat` 最终显示 7 个实质差异文件、28 行新增 / 938 行删除，符合删除式重构。
+- TIM6/TIM7 的三个生成源文件在忽略行尾空白后没有代码差异；`.ioc` 有真实的 FreeRTOS 任务/同步对象移除。
+- `git -c core.safecrlf=false diff --check` 没有报告新增行尾空格/空白错误。
+- 未收到最终只剩 7 个修改文件以及新 Commit / Push 的终端结果。
+
+### 初始假设
+
+与 2026-10-18 的已记录故障相同：CubeMX 新生成的 CRLF 工作区内容与 Git 历史 LF 格式不一致，而非大量 FreeRTOS 内核业务代码实际被改写。
+
+### 验证过程
+
+分组比较普通 Diff、`--ignore-space-at-eol` Diff 与文件列表；只对明确没有需要保留的业务差异的第三方文件或 EOL-only 文件执行 `git restore --worktree`，保留 `.ioc` 和业务源文件。使用 `git diff --check` 核查空白错误。
+
+### 根本原因
+
+本次大量修改显示主要由生成文件的行尾格式变化引起；未附 CubeMX 内部执行日志，不能进一步断言工具内部具体转换步骤。
+
+### 解决方案
+
+在确认无有效代码差异后定向恢复不需要提交的文件；重点保留与审核 `m4_ipc`、`m4_isr`、`freertos.c`、`main.c` 和 `.ioc`；不得使用 `git reset --hard` 或不审查就全量暂存。本次诊断使用的 `-c core.safecrlf=false` 不意味着永久关闭 Git 安全检查。
+
+### 验证结果
+
+已减少到 11 个工作区修改文件、7 个实质差异文件；Debug 增量构建与板级运行测试均已通过。最终 Git 状态 / Commit 仍待确认，本条问题按“主要噪音已隔离、提交前复核待完成”记录。
+
+### 为什么会犯这个错误
+
+CubeMX 再生代码可能把未主动编辑的文件重新写成另一种行尾格式；仅观察 Git 修改数量容易把格式差异误判为批量功能变更。
+
+### 如何避免再次发生
+
+生成前建立干净基线并备份；生成后先查看 `git status`、`git ls-files --eol`、忽略行尾 Diff 与普通 Diff，区分真实配置变化和 EOL-only 差异；提交前再检查暂存区和 `git diff --cached --check`。
+
+### 我学到了什么
+
+行尾提示与代码错误并不等价；只有把 CubeMX 配置源、生成代码、Git 索引及真实板级回归相互核对，才能得到可审计的功能提交。
+
+## 2026-10-29 M5 开发错误记录状态补充
+
+- M5-P1～P5 的已报告构建、ADC 电压、Half/Full 与回归日志中未出现已确认且未解决的新固件故障；不因故意注入的 250 Tick 延时和 Late 增加而虚构新的 ERR 编号。
+- 2026-10-28 M5-P0 的 CubeMX CRLF/LF 噪声已在后续 Git 审核后被排除，M5-P0 功能 `942fcc3`、文档 `e7f525c` 均已提交并推送；上方 `ERR-20261028-01` 中“待确认 Git 提交”属于当时的历史记录，现由此补充关闭。
+- 新的 ADC/TIM2/DMA 功能版本尚未提供对应的最终 Git 变更清单或提交结果；若 CubeMX 生成时再出现大面积 EOL-only Diff，继续沿用 `ERR-20261018-01` / `ERR-20261028-01` 的审核策略。
+- DMA Circular 潜在旧数据覆盖与 Thread Flags 通知合并目前记录在 `KG-014` 及 `TEST-20261029-01` 的设计/验证边界中，不能未经证据就登记为已复现固件 Bug。

@@ -1948,3 +1948,155 @@ Heap=3432 B        MinHeap=3432 B
   3. 烧录正式固件，确保不出现 `[SPSC] START`，Queue/Flags/Semaphore/Mutex/TIM7 ISR 正常，记录新的 Stack / Heap。
   4. 审查 SPSC 分支的六个文件并经 PR 合入 M4；更新本地 M4 分支，再 clean build / 板级回归。
   5. 整理文档与 Git checkpoint，待 M4 关闭验收确实完成后再通过 PR 合入 main。
+
+
+## TEST-20261028-01：M5-P0 清理前后 30 秒 UART 与 FreeRTOS 资源对比
+
+- 目标：验证移除 M4 演示任务后，正式 UART 输出量和 FreeRTOS 动态 Heap 占用确实下降，并保存可复核的前后对比。
+- 硬件与环境：STM32F407VGT6 + FreeRTOS/CMSIS-RTOS2；USART2 同步日志；清理前 Git 起点 `e793039`，M5 分支 `feature/m5-adc-timer-dma-baseline`。
+- 方法：清理前后分别采集约 30 秒 USART2 日志，读取 `osThreadGetStackSpace()`、`xPortGetFreeHeapSize()` 和 `xPortGetMinimumEverFreeHeapSize()`；不将 ELF RAM 大小误记为 FreeRTOS Heap。
+- 清理前日志证据（2026-10-28 用户提供的原始 30 秒记录，882 行）：
+
+```text
+[I][M4Q] rx seq=1 value=10 tick=1 count=0
+[I][M4ISR] TIM7 started
+[I][SPSC] START total=50000 capacity=7 elements
+[I][SPSC] PASS sent=50000 recv=50000 full=7064 empty=7419
+[I][SYS] HeartFree=384 B UARTFree=480 B M4ProdFree=808 B M4ConsFree=496 B
+[I][SYS] M4EvtFree=528 B M4WorkFree=528 B Heap=3432 B MinHeap=3432 B
+```
+
+- 清理后完整 30 秒日志（用户提供，共 9 行）：
+
+```text
+[I][UART] USART2 TX OK
+[I][SYS] HeartFree=384 B UARTFree=872 B
+[I][SYS] Heap=13504 B MinHeap=13504 B
+[I][UART] USART2 TX OK
+[I][SYS] HeartFree=384 B UARTFree=520 B
+[I][SYS] Heap=13504 B MinHeap=13504 B
+[I][UART] USART2 TX OK
+[I][SYS] HeartFree=384 B UARTFree=520 B
+[I][SYS] Heap=13504 B MinHeap=13504 B
+```
+
+- 对比数据：
+
+| 指标 | 清理前 | 清理后 | 变化 |
+| --- | ---: | ---: | --- |
+| UART 日志行数（约 30 秒） | 882 | 9 | 减少 873 行，约 98.98% |
+| 平均 UART 日志行数/s | 29.4 | 0.3 | 降低约 98.98% |
+| FreeRTOS Current Free Heap | 3432 B | 13504 B | 增加 10072 B |
+| Minimum Ever Free Heap（记录窗口） | 3432 B | 13504 B | 增加 10072 B |
+| HeartBeat 栈剩余 | 384 B | 384 B | 保持一致 |
+| UART 栈剩余 | 480 B（旧窗口） | 最低可见 520 B | 两次不同固件窗口 |
+| M4 演示日志 | 大量存在 | 未出现 | 清理后观测为 0 |
+
+- 任务数量：用户明确确认清理后实际应用任务为 2（`HeartBeatTask`、`UARTTask`）；不把 FreeRTOS Idle / Timer Service Task 混入该数量。
+- 验收：**PASS（30 秒观察窗口）**；输出量显著下降，运行时 Free Heap 增加，系统未出现原 M4 演示日志。
+- 边界：旧固件观察中 `[SPSC] START/PASS` 表明当次烧录的是启动 SPSC 专项的固件；新固件不出现 SPSC 日志仅证明观察窗口未执行该测试，不取代单独的 `ON/OFF` 双配置重建与任务检查；30 秒测试不证明长期内存无泄漏、ADC DMA 实时性或极限负载安全。
+
+## TEST-20261028-02：M5-P0 Debug 构建与生成代码差异审查
+
+- 目标：验证删除实验任务后代码能够编译链接，同时控制 CubeMX 重新生成引起的无关 EOL Diff。
+- 起点：`e793039`，分支 `feature/m5-adc-timer-dma-baseline`；修改范围为 `.ioc`、`freertos.c`、`main.c`、`m4_ipc` 和 `m4_isr` 相关文件。
+- 实际命令：`cmake --build --preset Debug`；构建输出 `[2/2] Linking C executable ...; Generating HEX/BIN files and printing firmware size`，未见编译或链接报错。
+- 固件大小：RAM `21128 B / 128 KB = 16.12%`，FLASH `27916 B / 1 MB = 2.66%`，CCMRAM `0 B / 64 KB`；ELF `text=27812`、`data=96`、`bss=21032`、`dec=48940`。
+- `.ioc` 真实修改：`FREERTOS.Tasks01` 从 6 个应用任务减少至 HeartBeat / UART 两项；移除 `SyncSem` 与 `SharedDataMutex`。
+- Git Diff 审查：CubeMX 生成后曾有 57 个修改文件；恢复第三方 FreeRTOS 源文件和确认的 EOL-only 变化后，用户给出的 `git status --short` 还剩 11 个修改文件；`git diff --ignore-space-at-eol --stat` 显示 7 个文件存在非行尾空白差异（28 行新增 / 938 行删除）；`git -c core.safecrlf=false diff --check` 无输出。
+- TIM6/TIM7：`Inc/tim.h`、`Src/tim.c`、`Src/stm32f4xx_hal_timebase_tim.c` 忽略行尾空白后无 Diff；不能据此宣称 TIM7 `.ioc` 配置已删除，HAL TIM6 时基的最终行为以板级运行回归为补充证据。
+- 验收：**PASS（当前增量 Debug 构建 / 静态 Diff 审查）**。
+- 未覆盖：没有 `--clean-first` 独立构建输出；尚未收到最终仅保留 7 个修改文件的 Git 状态、暂存区审查及功能 Commit / Push 记录。`core.safecrlf=false` 在此仅用于单条 Diff 检查，不作为仓库永久配置调整。
+
+## TEST-20261028-03：M5-P0 双任务正式运行态 NRST 与 Power-cycle 回归
+
+- 目标：确认移除 M4 实验任务后，双应用任务固件可在复位与完全断电后稳定恢复，并持续提供 UART / FreeRTOS 资源监控。
+- 条件：已烧录 M5-P0 清理后的 Debug 固件；USART2 输出 `[UART] USART2 TX OK` 和 `[SYS] HeartFree/UARTFree/Heap/MinHeap`；用户确认实际应用任务数为 2。
+- 测试操作：
+  1. NRST 连续 3 次。
+  2. 完全断电重新上电 Power-cycle 连续 3 次。
+- 提供的重启窗口日志节选：
+
+```text
+[I][UART] USART2 TX OK
+[I][SYS] HeartFree=384 B UARTFree=872 B
+[I][SYS] Heap=13504 B MinHeap=13504 B
+[I][UART] USART2 TX OK
+[I][SYS] HeartFree=384 B UARTFree=520 B
+[I][SYS] Heap=13504 B MinHeap=13504 B
+```
+
+- 运行指标：HeartBeat 栈剩余 384 B；UART 栈高水位日志先出现 872 B、部分后续采样为 520 B；Heap / MinHeap 均为 13504 B。用户确认六次启动输出正常，未报告 M4 演示日志、Hang 或 HardFault。
+- 观察说明：原始粘贴文本个别复位日志前有 `€` 字符，之后 UART 行完整；该现象不足以单独证实固件错误，也没有按六次测试逐次附加完整起止时间戳。不凭片段计算每次上电耗时。
+- 验收：6 次复位/断电回归，不外推为连续长时间工业级可靠性或 DMA 采集验证。
+- Git/归档：功能与文档提交尚无新 Hash；待导入更新文档并执行暂存审核、Commit、Push。
+
+## TEST-20261028-04：M5-P0 功能与文档 Git 归档确认
+
+- 目标：验证 M5-P0 运行时任务清理与对应文档形成可回溯且远程同步的独立提交。
+- 用户实际命令：`git status`、`git log -5 --oneline --decorate`、`git branch -vv`。
+- 结果：`942fcc3 refactor: remove legacy M4 demo tasks and simplify runtime logging`；`e7f525c docs: record M5-P0 runtime cleanup verification`；`feature/m5-adc-timer-dma-baseline` 与 `origin/feature/m5-adc-timer-dma-baseline` 同为 `e7f525c`，工作区 `nothing to commit, working tree clean`。
+- 对照：清理前 `m5-pre-cleanup-20261028` 标签及 main 均在 `e793039`。
+- 结论：**PASS（M5-P0 Git 功能/文档归档）**。
+- 边界：此为当时的 Git 状态快照，不表示其后 ADC 开发的工作区仍然干净。
+
+## TEST-20261028-05：M5-P1～P2 ADC/TIM2 TRGO/DMA 基础链路与全量程电压变化
+
+- 目标：验证 TIM2 硬件周期触发 ADC1 Regular Conversion，DMA Circular 依次写入缓冲区，Half/Full 回调通知 FreeRTOS 采集任务，UART 输出电位器电压变化。
+- 硬件：STM32F407VGT6；10 kΩ 电位器连接 3.3 V/GND，滑动端连接 PA1（ADC1_IN1），避免 PA0/WKUP 复用冲突；未提供同步万用表读数。
+- 关键配置：HCLK 168 MHz，APB1 Timer Clock 84 MHz；TIM2 内部时钟、Slave Mode Disable、TRGO Update Event、PSC=8399、ARR=199，设计更新 50 Hz / 20 ms；ADC1 Channel1、12-bit、External Trigger TIM2 TRGO Rising、Continuous Conversion Disabled；ADC Clock 配置 21 MHz、Sampling Time 84 Cycles；DMA2 Stream0、Peripheral-to-Memory、Circular、Half Word / Half Word、Memory Increment Enabled、FIFO Disabled、DMA IRQ 优先级 5 / Sub 0。
+- 代码链：在 `StartAcquisitionTask()` 先 `HAL_ADC_Start_DMA()`，再 `HAL_TIM_Base_Start()`，Buffer 为 `uint16_t adc_buffer[20]`；HAL ADC Half/Full Callback 计数并设置 Thread Flags，采集任务分别对 10 个样本求平均，按 3300 mV 假定参考值换算；UART 每约 10 秒摘要输出。
+- 第一次有效窗口：电压 `1438 → 619 → 1441 → 1987 mV`，Half / Full 分别由 `23/22`、`48/47` 至 `73/72`，Error 始终 0；另一段计数重新从 `23/22` 开始，属于不同启动窗口，不能合并做单次累计。
+- 全量程旋钮测试九条采样：`2, 612, 1065, 1451, 2250, 2974, 3287, 3285, 3286 mV`；最大端三点波动范围 2 mV。Half 从 23 增至 223，Full 从 22 增至 222，每相邻约 10 秒报告分别增加 25 次，Error 皆 0。
+- 频率核对：同一种 Half（或 Full）事件每完成一个 20 元素循环才再次产生，理论间隔约 400 ms；日志间增量 +25 与约 10 秒的监控周期、设计 50 Hz 一致。用户口述平均输出约 9 秒，且没有精确时间戳，**不能单凭该日志声明计时精度已精密标定**。
+- 实验期间构建：`cmake --build --preset Debug` 成功；RAM `21432 B (16.35%)`、FLASH `35404 B (3.38%)`、CCMRAM `0`。短时 `Heap=MinHeap=12368 B`、HeartFree `384 B`、UARTFree 最低 `512 B`。
+- 结论：**PASS（硬件触发、DMA 回调、FreeRTOS 通知与模拟电压变化的基础功能）**。
+- 边界：未测量 PA1 实际输入电压 / ADC 绝对精度；未证明全部原始样本绝对不丢失或最坏情况下无覆盖。
+
+## TEST-20261029-01：M5-P3 DMA 回调与采集任务处理计数对比、人工延时压力测试
+
+- 目标：在现有双半区 DMA Circular + Thread Flags 基线上，观察采集任务处理是否跟上回调、简单 Late 检测是否对故意加大的处理延迟产生响应。
+- 代码：保留 `adc_half_count` / `adc_full_count`、新增 Half/Full Processed 计数；在 DMA 回调记录各自 Tick、处理相应 Buffer 半区前比较 Tick 差，超过/达到 200 Tick 时累计 `adc_late_count`。人为 `osDelay()` 放在 `osThreadFlagsWait()` 成功返回后、实际读取 Buffer 之前。Tick 与毫秒的对应关系依赖工程 `configTICK_RATE_HZ`，日志未附该宏的直接输出。
+- 条件：DMA 20 元素，单次 Half/Full 各 10 个，设计 50 Hz；用户使用 0、50、250 Tick 三组延迟测试。
+
+| 组别 | 延时参数 | 最后 Half（Processed/Callback） | 最后 Full（Processed/Callback） | 最后 Late | ADC Error | 判定 |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| A | 0 Tick | 73/73 | 72/72 | 0 | 0 | 正常负载下未观察到滞后 |
+| B | 50 Tick | 72/73 | 72/72 | 0 | 0 | 轻度延迟未触发超时；瞬时 Half 差 1 |
+| C | 250 Tick | 72/73 | 71/72 | 87 | 0 | 故意超时注入检出 Late 增长 |
+
+- C 组 Late 依次记录 `27 → 57 → 87`；Half/Full 任务处理与回调计数仅差 0～1 次，未呈现持续扩大差距。不能据此认定发生了永久丢块；也不能以计数基本相等就认定未覆盖旧样本。
+- 机制解释：Thread Flags 相同 bit 可合并；DMA Circular 不会等待任务读取完才覆盖旧半区；`ADC Error=0` 不代表软件数据完整性正常。当前 Tick 检测用的是最近一次对应回调的时间戳，重复回调可能更新 Tick，因此属于简化的超时风险观察，而非严格逐块可追踪验证。
+- 资源：三组日志中的 Heap/MinHeap 均为 `12368 B`，HeartFree `384 B`、UARTFree 后续最低观测 `512 B`。
+- 结论：**PASS（人工处理超时检测有效、正常/轻延时条件下本次未观察到超时）**；**不作逐样本无丢失或实际覆盖次数声明**。
+
+## TEST-20261029-02：M5-P3 正常模式恢复、Debug 构建与 FreeRTOS 资源回归
+
+- 目标：确认压力测试的 250 Tick 人为延时已移除，采集链回到正式运行态，DMA 回调、任务处理与超时统计恢复正常。
+- 实际命令：`cmake --build --preset Debug`；输出 `[2/2] Linking C executable ...`，生成 ELF/HEX/BIN；无报告的编译/链接错误（增量构建，非 `--clean-first`）。
+- 固件大小：RAM `21448 B / 128 KB = 16.36%`；FLASH `35680 B / 1 MB = 3.40%`；CCMRAM `0`；ELF `text=35576`、`data=96`、`bss=21352`、`dec=57024`。
+- USART2 连续三次状态：
+
+```text
+[I][ADC] Voltage=3288 mV Error=0
+[I][DMA] Half=23/23 Full=22/22
+[I][DMA] Late=0
+[I][ADC] Voltage=3284 mV Error=0
+[I][DMA] Half=48/48 Full=47/47
+[I][DMA] Late=0
+[I][ADC] Voltage=3286 mV Error=0
+[I][DMA] Half=73/73 Full=72/72
+[I][DMA] Late=0
+```
+
+- 资源：`Heap=12368 B MinHeap=12368 B`（三次相同）；`HeartFree=384 B`；`UARTFree=824 B` 首次、后续 `512 B`。LED / UART 运行正常（用户实测）。
+- 结论：**PASS（正常采集回归、增量 Debug 构建）**。
+- 边界：这三次快照只能证明本轮观察窗口内无计数不匹配与 Late；不能证明所有强干扰情形下绝对无丢样。
+
+## TEST-20261029-03：M5-P5 长时间运行与 NRST/Power-cycle 重启验证
+
+- 目标：验证恢复无人工延时的基础采集固件，在用户执行的持续运行与复位操作后仍可正常工作。
+- 实际操作与结果：明确确认长时间运行 **PASS**；NRST ×3 **PASS（3/3）**；完全断电后 Power-cycle ×3 **PASS（3/3）**。
+- 已知板级状态：恢复常规采集的串口窗口 `Error=0`、`Late=0`，Half/Full 已处理次数与回调次数一致、Heap/MinHeap 均为 `12368 B`。用户未附长时间运行全过程的逐时日志，也未提供准确持续分钟数或全部六次复位逐次原始串口记录。
+- 结论：**PASS（用户报告的既定长时间运行及六次复位回归）**。
+- 边界：不得将该记录写为“精确 30 分钟测试”“全天无丢样”或工业级安全/可靠性认证；最坏场景的逐样本完整性仍需更严格证据。

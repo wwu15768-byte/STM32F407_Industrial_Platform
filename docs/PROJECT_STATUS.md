@@ -3,37 +3,34 @@
 > 唯一回答：项目现在在哪？
 > 更新时机：项目状态发生明显变化时。
 
-更新时间：2026-10-27
+更新时间：2026-10-29
 
 ## Current Milestone
 
-M4：RTOS 通信、同步和数据缓冲（**功能验证基本完成；独立 SPSC 分支已提交并推送，里程碑尚未正式关闭**）。M0～M3 已完成。
+M5：ADC + Timer + DMA 实时数据采集子系统。M0～M4 已完成，M5-P0 的功能与文档提交已经推送；M5-P1～P5 **基础采样、FreeRTOS 处理、人工延时测试与用户报告的稳定性/重启回归均已完成**。当前重点是本轮 ADC 功能及测试文档的 Git 归档，不把此功能级验证扩大为工业级绝对无丢样证明。
 
-- M4.1 Queue：完成。
-- M4.2 CMSIS-RTOS2 Thread Flags Task → Task：完成，含重复 Flag 合并验证。
-- M4.3 Binary Semaphore / Mutex：完成基础与联合回归。
-- M4.4 Ring Buffer：Empty / Full / FIFO / Wrap-around 基础功能 PASS；2026-10-27 **Task ↔ Task SPSC 50,000 元素并发专项 PASS**。
-- M4.5 TIM7 ISR → Worker：100 ms / 10 Hz 通知链路及持续运行基线 PASS。
-- M4 Final Integration：临时同机多模块联测及用户确认的长期运行已通过；SPSC 专项在独立分支通过。尚需 SPSC OFF 正式固件回归、M4 最终 NRST ×3 / Power-cycle ×3 的证据、PR 合并和文档关闭。
-- M5 ADC + Timer + DMA：未开始。
+- M5-P0：运行时任务/日志清理完成、双任务基线验证并归档（`942fcc3`、`e7f525c`）。
+- M5-P1：PA1/ADC1_IN1、TIM2 TRGO Update、DMA2 Stream0 Circular 外设配置完成。
+- M5-P2：50 Hz（设计值）硬件触发、10 kΩ 电位器全量程变化、Half/Full Callback 验证通过。
+- M5-P3：Half/Full Callback/Processed 计数、Late 及 0/50/250 Tick 延时测试完成；250 Tick 成功触发 Late，恢复正常后 Late=0。
+- M5-P4：`AcquisitionTask`接入 Thread Flags 与 10 点平均电压处理，并通过板级正常模式验证。
+- M5-P5：用户确认长时间运行、NRST ×3、Power-cycle ×3 均正常；实际长时间测试的具体时长未提供。
 
 ## Current Goal
 
-完成 SPSC 专项分支并入 M4、最终正式固件验收及 M4 里程碑关闭，不重复已完成的 M4.1～M4.5 基础功能。
-
-已验证的 SPSC 独立运行数据链路：
+保存并归档已通过基本验收的 M5 ADC 采集版本，核对生成代码、项目配置和 Git 变更；准备单独的 ADC 功能 Commit 与测试文档 Commit。当前最小已实测链路：
 
 ```text
-SpscProducerTask (uint32_t 1..50000)
-  -> Ring Buffer [8 个 uint32_t，预留 1 槽；有效 7 元素]
-  -> SpscConsumerTask (校验连续、无重号跳号)
+TIM2 TRGO Update (84 MHz; PSC=8399; ARR=199; nominal 50 Hz)
+  -> ADC1_IN1 / PA1 (12-bit, 84 cycles sampling)
+  -> DMA2 Stream0 Circular (uint16_t[20], halves of 10)
+  -> HAL_ADC_ConvHalfCpltCallback / HAL_ADC_ConvCpltCallback
+  -> osThreadFlagsSet(HAL ADC callback context)
+  -> AcquisitionTask / osThreadFlagsWait
+  -> 10-sample average -> voltage (mV) -> UARTTask summary
 ```
 
-- `head/tail` 使用 C11 `_Atomic` 与 acquire/release 内存序；仅有一个 Producer 修改 head、一个 Consumer 修改 tail。
-- Full 时拒绝写入并重试同一元素，Full 尝试 `7064` 次；Empty 读取重试 `7419` 次；最终 `50000` 发 / `50000` 收，`overflow_count=7064`。
-- Worker Stack 采样：SPSC Producer `876 B`，Consumer `444 B`，ISR Worker `520 B`；Heap / MinHeap `3432 B`。
-- 本次测试只证明 Task ↔ Task SPSC；不能推广为 ISR ↔ Task 或 DMA Buffer Ownership 正确。
-- 分支：`feature/m4-spsc-concurrency-verification`，已知 HEAD/远程 `d93665e`；父级 M4 分支已知为 `405b9ab`，**没有收到 PR 已合并的确认**。
+ISR 中不进行阻塞 UART 输出；TIM6 继续承担 HAL Timebase，SysTick 用于 FreeRTOS Tick。`Error=0` 与处理计数匹配只能支持本次观测窗口的基础行为，不构成逐样本完整性证明。
 
 ## Completed
 
@@ -294,72 +291,55 @@ SpscProducerTask (uint32_t 1..50000)
 - 与 M4ISR 并行运行时原 Queue、Semaphore、Mutex、Task Flags 和 UART 继续正常输出。
 - 新增 ISR Worker 后测得 Stack 历史最小剩余 520 B，Heap/MinHeap 3432 B；用户确认后续持续运行测试通过。
 - M4.5 独立功能 checkpoint：`adf5d5e`，已推送远程；用户确认本地分支 clean。
+- M4 最终验证已通过。
 
-- 2026-10-27：M4 最终临时集成运行中，Ring Buffer 确定性测试 EMPTY/FULL/FULL READ/WRAP WRITE/WRAP READ 全部 PASS，之后原 Semaphore 与 Queue / M4F / Mutex / TIM7 ISR 继续并行运行；用户确认长期运行通过（准确时长及最终末尾计数未给出）。
-- 2026-10-27：独立 SPSC 测试两 Task 共传输 50,000 个递增 `uint32_t`，最终 `PASS sent=50000 recv=50000 full=7064 empty=7419`、`overflow=7064 elapsedTicks=7501`；不是历史分阶段握手实验。
-- SPSC 压力运行期间 Queue `seq=1..40` 连续，TIM7 ISR 可见至 `irq=70 received=70 errors=0`，Semaphore / Mutex / M4F 正常；Heap / MinHeap=3432 B，SPSC P/C Stack 剩余 876/444 B。
-- SPSC 功能 checkpoint：`d93665e` 已在独立分支提交并推送，用户确认工作区 clean；父 M4 文档 checkpoint 为 `405b9ab`。
+- 2026-10-28 M5-P0 Git 归档完成并远程同步：功能 `942fcc3`，文档 `e7f525c`；上一次确认的干净 HEAD 为 `e7f525c`，main 仍为 `e793039`。
+- M5 新增 ADC1_IN1（PA1，10 kΩ 电位器）、TIM2 TRGO（84 MHz / 8399 / 199 = 50 Hz 设计值）、DMA2 Stream0 Circular（20×`uint16_t`），利用 Half/Full Callback 与 FreeRTOS `AcquisitionTask` 进行 10 点平均电压估算。
+- 板级电压范围 `2～3287 mV`、最大端稳定测得 3287/3285/3286 mV，尚无万用表校准证据。
+- DMA 回调与 Task Processed 计数对照：0、50 Tick 延时 Late=0；250 Tick 压力注入 Late=27→57→87，检测到超时风险；恢复正常后 Half=73/73、Full=72/72、Late=0、Error=0。
+- 最新 Debug 增量构建成功（RAM 21448 B / 16.36%，FLASH 35680 B / 3.40%，CCMRAM 0），Heap/MinHeap=12368 B，HeartFree=384 B，UARTFree 最低可见 512 B。
+- 用户确认当前 M5 采集固件长时间运行与 NRST ×3、Power-cycle ×3 均通过；时长未量化，不推断长期极端负载下逐样本无损。
 
 ## In Progress
 
-- SPSC 测试作为可选构建代码保留，源文件 `Inc/m4_spsc_test.h` / `Src/m4_spsc_test.c`，通过 `M4_ENABLE_SPSC_TEST` 启用；需要确认 CMake Cache `OFF` 后正式基线 clean build、烧录、无 SPSC 日志的回归证据。
-- 按 M4 关闭标准补齐 SPSC 版本 NRST ×3、完全断电重启 ×3；之前 M1～M3 的重启记录不替代本次最终固件测试。
-- 将 `feature/m4-spsc-concurrency-verification` 经 PR 合入 `feature/m4-rtos-communication-baseline`，在合并后复核真实工作区、功能和资源。
-- 更新 M4 最终集成报告与文档 Git checkpoint，随后评估 M4 → `main` 的 PR 合并与 M5 分支建立。
+- 本次 M5 ADC/TIM2/DMA 功能版本与测试文档尚未收到最终 Git Diff、Commit/Push 和新 HEAD 的用户确认；准备审查并归档。
+- 独立 `--clean-first` 构建、准确长时间运行时长、逐块缓冲区覆盖检测及精密 ADC 标定/频率测量尚未提供，按风险与未来专项需求处理；不把本轮既定基础功能回归重新判为失败。
 
 ## Blocked
 
-当前无确认的外部依赖阻塞；剩余项主要是实机复位/正式基线验证，以及 Git PR 与文档收尾，不能视为已完成。
+当前没有已确认的外部硬件或工具阻塞；Git 审核与文档提交属于尚待完成的归档工作。
 
 ## Known Bugs
 
-当前日志中无已确认且尚未解决的固件运行 Bug。
-
-- M4.1 Queue Producer 历史 Stack 不足、M4.3 同步任务 Stack 余量不足，已在既有 checkpoint 调优。
-- M4.4 Ring Buffer Consumer 曾因未检查读取返回状态重复打印旧值，已修复并有确定性测试记录。
-- CubeMX Generate Code 曾将 LF 工作区文件改为 CRLF，导致大量 Git 工作区噪声；已用字节级定向 CRLF → LF 方式恢复，仍属于每次重新生成后要检查的开发流程风险。
-- TIM7 早期生成的 ARR 为 9，与目标 999 不一致；随后确认 `.ioc` 为 `TIM7.Period=999`、重新生成的 `Src/tim.c` 为 999，已解决。
-- Ring Buffer 文档的数据类型/字节容量与先前上传的源码快照不一致，属于待复核的文档一致性问题，而非已证实的运行 Bug。
-- Ring Buffer **Task ↔ Task SPSC** 已通过 50,000 元素专项验证；**ISR ↔ Task 共享 Ring Buffer、DMA Ownership、多生产者**仍未验证，属于适用边界而非已确认 Bug。
-- 当前同步 `LOG_xxx()` 不是 ISR-safe。
+- 当前 M5 ADC 正式采集日志未报告已确认且未解决的固件运行 Bug，`ADC Error=0`、`Late=0` 只代表给定窗口内未观察到对应错误。
+- 250 Tick 延时出现 Late=27→57→87，为故意压力测试下的预期超时现象，不判定为默认运行模式故障。
+- CubeMX 生成可能再引入 CRLF/LF 工作区噪音，仍须按 `ERR-20261018-01` 和 `ERR-20261028-01` 的规则逐文件核查。
+- TIM6 HAL Timebase 必须保留；TIM7 历史 M4 配置不等于当前 ADC 触发时钟，现采用 TIM2 TRGO。
+- DMA Circular 旧数据覆盖、Thread Flags 重复通知合并与逐块所有权尚未做严格的最坏场景证明，记录为 `KG-014` 技术边界，不虚构已发生的丢样 Bug。
 
 ## Current Branch
 
-- 最新用户确认 Branch：`feature/m4-spsc-concurrency-verification`。
-- Upstream：`origin/feature/m4-spsc-concurrency-verification`。
-- HEAD / origin：`d93665e`：`feat: verify M4 ring buffer SPSC concurrency baseline`（用户明确确认工作区 clean）。
-- 父级 M4 主开发分支：`feature/m4-rtos-communication-baseline`，最近已知 HEAD / origin 为 `405b9ab`：`docs: record M4 ISR notification baseline verification`。
-- 历史 M4.5 功能 `adf5d5e`；Semaphore 恢复 `c4c0721`；Ring Buffer 基础功能 `f8c3e52`。
-- **没有本次 SPSC → M4 PR 完成或 M4 → main 合并成功的证据**。本 ZIP 文档更新尚未写入用户仓库、尚无新的文档提交号。
+- 当前开发分支：`feature/m5-adc-timer-dma-baseline`。
+- 最后一次用户实际确认同步且工作区 clean 的 Git HEAD：`e7f525c`（M5-P0 文档），其父级功能提交 `942fcc3`；当时 `origin/feature/m5-adc-timer-dma-baseline` 亦为 `e7f525c`。
+- main 与 `origin/main` 在最后确认时均为 `e793039`，标签 `m5-pre-cleanup-20261028` 指向该清理前基线。
+- **M5 ADC/TIM2/DMA 当前功能代码已构建、烧录和测试，但尚未收到本轮新 Git Commit/Push、最终工作区 clean 的终端证据**；不虚构新 Hash，也不把 M5 功能误记为已合并 main。
 
 ## Last Verified Function
 
-2026-10-27 最新专项：M4 Ring Buffer **Task ↔ Task SPSC**，同时保留 M4 联合通信验证。
+最新验收：**M5 ADC1_IN1 + TIM2 TRGO + DMA2 Circular + FreeRTOS 采集链基础功能与用户报告的稳定性/复位回归**。
 
-- 硬件/系统：STM32F407VGT6 + FreeRTOS / CMSIS-RTOS2，Ring Buffer `uint32_t buffer[8]`，可用容量 7 元素，C11 `_Atomic head/tail`。
-- 并发测试：SPSC Producer 与 Consumer 两独立任务；不以逐次 Flag 控制交换次序；接收侧逐项校验 1..50000。
-- 实测日志：
-
-```text
-[I][SPSC] START total=50000 capacity=7 elements
-[I][SPSC] PASS sent=50000 recv=50000 full=7064 empty=7419
-[I][SPSC] overflow=7064 elapsedTicks=7501
-[I][SYS] SpscPFree=876 B SpscCFree=444 B
-[I][SYS] M4EvtFree=528 B M4WorkFree=528 B Heap=3432 B MinHeap=3432 B
-[I][SYS] ISRWorkerFree=520 B
-```
-
-- 同机回归观察：M4Q `seq=1..40` 连续，M4F 事件成对接收，Semaphore Release/Acquire 持续，Mutex 共享数值按 A:+1/B:+10 变化；TIM7 统计 `irq=70 received=70 errors=0`（日志截取窗口）。
-- 结论：本次 50,000 个数据未出现顺序校验失败，Full/Empty 均出现，测试程序报告 PASS；`overflow=7064` 是满时失败写入尝试，不是 7064 个最终丢失数据。
-- 资源：SYS 采样中 Heap/MinHeap 均为 3432 B，SPSC Consumer Stack 剩余 444 B；不能将 7.501 秒的专项测试误写成长期工业级压力证明。
-- 与之前暂时将 Ring Buffer 基础测试放在 Semaphore 任务中的联合实验不同；原联合运行用户确认长期通过，记录为**另一项**测试，不混成无阶段同步 SPSC。
-- 运行范围：Task ↔ Task 单生产者/单消费者，不覆盖 ISR ↔ Task、DMA 和多生产者访问。
-- 提交：`d93665e` 已推送独立 SPSC 分支；合并与正式固件最终验收待执行或待提交证据。
+- 模拟输入：PA1 / ADC1_IN1，10 kΩ 电位器；电压逐步变化 `2, 612, 1065, 1451, 2250, 2974, 3287, 3285, 3286 mV`；结果为基于 3300 mV 假定参考值的估算，未做万用表准确度对照。
+- 采样：TIM2 PSC=8399、ARR=199，APB1 Timer Clock 84 MHz，设计 50 Hz；ADC1 12-bit、Sampling Time=84 cycles、External Trigger=TIM2 TRGO Rising；DMA2 Stream0 Circular、20 元素 / 每半区 10 元素。
+- 正式运行前后计数：最后 `Half=23/23→48/48→73/73`、`Full=22/22→47/47→72/72`，均为 Processed/Callback，`Late=0`、`Error=0`；约 10 秒间相同回调计数增加 25，符合设计级频率核对但非精密标定。
+- 人工延时：A 0 Tick Late=0；B 50 Tick Late=0（Half 最后 72/73）；C 250 Tick Late=27、57、87（最后 Half=72/73、Full=71/72）。延时放在 Wait 返回和读取 DMA Buffer 之间，可暴露晚读风险；这不等于已证明覆盖了多少原始样本。
+- 最新 Debug 构建 `cmake --build --preset Debug` 成功，RAM 21448 B（16.36%）、Flash 35680 B（3.40%）；动态 Heap/MinHeap 12368 B、HeartFree 384 B、UARTFree 最低可见 512 B；LED/UART 正常。
+- 用户报告长时间运行 PASS、NRST ×3 PASS、Power-cycle ×3 PASS；未提供确切运行时长或完整六次逐次日志。
+- 详细证据：`TEST-20261028-05`、`TEST-20261029-01`～`TEST-20261029-03`；风险边界：`KG-014`。
 
 ## Next Step
 
-1. 如尚未完成，补齐 SPSC 专项 NRST ×3、Power-cycle ×3 以及 SPSC PASS 后其余 M4 模块继续稳定运行的实测证据。
-2. 显式设置 `cmake --preset Debug -DM4_ENABLE_SPSC_TEST=OFF`，执行 clean build、烧录正式固件，检查没有 `[SPSC] START` 且 Queue / Semaphore / Mutex / Thread Flags / TIM7 ISR 正常、资源稳定。
-3. 审核 `d93665e` 的六个目标文件及原子内存序实现，创建并合并 SPSC → M4 PR（Base: M4；Compare: SPSC）；确认远程状态并 fast-forward 本地 M4 分支。
-4. 合并后的正式 M4 分支再次构建/板级验收，归档 `TEST_RECORD.md` 和其他 docs 的最终事实与未覆盖边界，建立 docs checkpoint。
-5. M4 最终验收通过后，通过 PR 将 M4 → `main`；**未确认前不得把 M4 写为完成**，不提前创建 M5 功能分支。
+1. 保持当前已经板级通过的无人工延时采集版本，不在归档前做无关优化或加入复杂模块。
+2. 检查 `git status --short`、`git diff --ignore-space-at-eol --stat`、`git diff --check`、`.ioc` / `adc.c` / `dma.c` / `tim.c` / `freertos.c` / CMake 的真实改动，排除 CubeMX EOL-only 噪音。
+3. 可选补做 `cmake --build --preset Debug --clean-first`，若执行需记录真实结果而非提前填写 PASS。
+4. 先审查并提交 ADC/TIM2/DMA/AcquisitionTask 功能代码，再审查并提交本次九份文档；推送 M5 功能分支，确认新 HEAD、upstream 与 clean working tree。
+5. 新任务里程碑由后续计划决定：严格逐块无损保障和绝对精度校准保留为已知边界，后续如果需要再设计，不把基本采样功能重复做一遍。

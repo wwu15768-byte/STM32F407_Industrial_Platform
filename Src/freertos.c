@@ -30,6 +30,9 @@
 #include "m4_ipc.h"
 #include "ring_buffer.h"
 #include "m4_isr.h"
+#include "adc.h"
+#include "tim.h"
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -45,7 +48,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define RINGBUFFER_OR_SEMAPHORBINARY  1U
+#define ADC_FLAG_HALF (1UL << 0)
+#define ADC_FLAG_FULL (1UL << 1)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -55,11 +59,20 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-static uint32_t shared_value = 0U;
-static uint32_t shared_op_seq = 0U;
-#if(RINGBUFFER_OR_SEMAPHORBINARY == 0U)
-static RingBuffer_t ring_buffer;
-#endif
+#define ADC_BUFFER_SIZE 20U
+
+static uint16_t adc_buffer[ADC_BUFFER_SIZE];
+volatile uint32_t voltage = 0;
+
+volatile uint32_t adc_half_count = 0U;
+volatile uint32_t adc_full_count = 0U;
+volatile uint32_t adc_error_count = 0U;
+volatile uint32_t adc_half_processed = 0U;
+volatile uint32_t adc_full_processed = 0U;
+volatile uint32_t adc_half_tick = 0U;
+volatile uint32_t adc_full_tick = 0U;
+volatile uint32_t adc_late_count = 0U;
+
 /* USER CODE END Variables */
 /* Definitions for HeartBeatTask */
 osThreadId_t HeartBeatTaskHandle;
@@ -75,80 +88,22 @@ const osThreadAttr_t UARTTask_attributes = {
   .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
-/* Definitions for SemProducerTask */
-osThreadId_t SemProducerTaskHandle;
-const osThreadAttr_t SemProducerTask_attributes = {
-  .name = "SemProducerTask",
-  .stack_size = 192 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
-};
-/* Definitions for SemConsumerTask */
-osThreadId_t SemConsumerTaskHandle;
-const osThreadAttr_t SemConsumerTask_attributes = {
-  .name = "SemConsumerTask",
-  .stack_size = 192 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
-};
-/* Definitions for MutexTaskA */
-osThreadId_t MutexTaskAHandle;
-const osThreadAttr_t MutexTaskA_attributes = {
-  .name = "MutexTaskA",
+/* Definitions for AcquisitionTask */
+osThreadId_t AcquisitionTaskHandle;
+const osThreadAttr_t AcquisitionTask_attributes = {
+  .name = "AcquisitionTask",
   .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
-};
-/* Definitions for MutexTaskB */
-osThreadId_t MutexTaskBHandle;
-const osThreadAttr_t MutexTaskB_attributes = {
-  .name = "MutexTaskB",
-  .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
-};
-/* Definitions for SharedDataMutex */
-osMutexId_t SharedDataMutexHandle;
-const osMutexAttr_t SharedDataMutex_attributes = {
-  .name = "SharedDataMutex"
-};
-/* Definitions for SyncSem */
-osSemaphoreId_t SyncSemHandle;
-const osSemaphoreAttr_t SyncSem_attributes = {
-  .name = "SyncSem"
+  .priority = (osPriority_t) osPriorityAboveNormal,
 };
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
-#if (RINGBUFFER_OR_SEMAPHORBINARY == 0U)
-#define RB_TEST_FLAG (1UL << 0)
 
-static bool RB_TestWait(void)
-{
-    uint32_t flags = osThreadFlagsWait(
-        RB_TEST_FLAG,
-        osFlagsWaitAny,
-        osWaitForever
-    );
-
-    return ((flags & osFlagsError) == 0U) &&
-           ((flags & RB_TEST_FLAG) != 0U);
-}
-
-static bool RB_TestNotify(osThreadId_t task)
-{
-    uint32_t result = osThreadFlagsSet(
-        task,
-        RB_TEST_FLAG
-    );
-
-    return (result & osFlagsError) == 0U;
-}
-#endif
 /* USER CODE END FunctionPrototypes */
 
 void StartHeartBeatTask(void *argument);
 void StartUARTTask(void *argument);
-void StartSemProducerTask(void *argument);
-void StartSemConsumerTask(void *argument);
-void StartMutexTaskA(void *argument);
-void StartMutexTaskB(void *argument);
+void StartAcquisitionTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -161,9 +116,6 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
 
   /* USER CODE END Init */
-  /* Create the mutex(es) */
-  /* creation of SharedDataMutex */
-  SharedDataMutexHandle = osMutexNew(&SharedDataMutex_attributes);
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -172,10 +124,6 @@ void MX_FREERTOS_Init(void) {
       Error_Handler();
   }
   /* USER CODE END RTOS_MUTEX */
-
-  /* Create the semaphores(s) */
-  /* creation of SyncSem */
-  SyncSemHandle = osSemaphoreNew(1, 0, &SyncSem_attributes);
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
@@ -196,42 +144,22 @@ void MX_FREERTOS_Init(void) {
   /* creation of UARTTask */
   UARTTaskHandle = osThreadNew(StartUARTTask, NULL, &UARTTask_attributes);
 
-  /* creation of SemProducerTask */
-  SemProducerTaskHandle = osThreadNew(StartSemProducerTask, NULL, &SemProducerTask_attributes);
-
-  /* creation of SemConsumerTask */
-  SemConsumerTaskHandle = osThreadNew(StartSemConsumerTask, NULL, &SemConsumerTask_attributes);
-
-  /* creation of MutexTaskA */
-  MutexTaskAHandle = osThreadNew(StartMutexTaskA, NULL, &MutexTaskA_attributes);
-
-  /* creation of MutexTaskB */
-  MutexTaskBHandle = osThreadNew(StartMutexTaskB, NULL, &MutexTaskB_attributes);
+  /* creation of AcquisitionTask */
+  AcquisitionTaskHandle = osThreadNew(StartAcquisitionTask, NULL, &AcquisitionTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
-  if (M4Ipc_Init() != M4_IPC_OK)
-  {
-      Error_Handler();
-  }
-
-  M4IsrStatus_t isr_status = M4ISR_Init();
-
-  if (isr_status != M4_ISR_OK)
-  {
-      Error_Handler();
-  }
-
-  #if defined(M4_ENABLE_SPSC_TEST)
+#if defined(M4_ENABLE_SPSC_TEST)
   if (M4SpscTest_Init() != M4_SPSC_OK)
   {
-    Error_Handler();
+      Error_Handler();
   }
-  #endif
-    /* USER CODE END RTOS_THREADS */
+#endif
+  /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
   /* add events, ... */
+
   /* USER CODE END RTOS_EVENTS */
 
 }
@@ -269,58 +197,48 @@ void StartUARTTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-    LOG_INFO("UART", "USART2 TX OK");
+
     /*
-    在 StartUARTTask 执行一段时间后开始检测剩余栈，
-    跳过前几个周期，使任务先运行一段时间后再开始记录栈余量。
+    检测剩余栈与运行状态
     */
     stack_sample_count ++;
 
-    if(stack_sample_count >= 5U)
+    if(stack_sample_count % 10 == 0U)
     {
       uint32_t heartbeat_stack_free;
       uint32_t uart_stack_free;
-      uint32_t semproducer_stack_free;
-      uint32_t semconsumer_stack_free;
-      uint32_t mutex_a_stack_free;
-      uint32_t mutex_b_stack_free;
-      uint32_t isr_worker_stack_free;
+
       size_t heap_free;
       size_t heap_min_free;
       heartbeat_stack_free = osThreadGetStackSpace(HeartBeatTaskHandle);
       uart_stack_free = osThreadGetStackSpace(UARTTaskHandle);
-      semproducer_stack_free = osThreadGetStackSpace(SemProducerTaskHandle);
-      semconsumer_stack_free = osThreadGetStackSpace(SemConsumerTaskHandle);
-      mutex_a_stack_free = osThreadGetStackSpace(MutexTaskAHandle);
-      mutex_b_stack_free = osThreadGetStackSpace(MutexTaskBHandle);
-      isr_worker_stack_free = M4ISR_GetWorkerStackFree();
+
       heap_free = xPortGetFreeHeapSize();
       heap_min_free = xPortGetMinimumEverFreeHeapSize();
-
+      LOG_INFO("UART", "USART2 TX OK");
       LOG_INFO("SYS",
-         "HeartFree=%lu B UARTFree=%lu B M4ProdFree=%lu B M4ConsFree=%lu B",
+         "HeartFree=%lu B UARTFree=%lu B ",
          (unsigned long)heartbeat_stack_free,
-         (unsigned long)uart_stack_free,
-         (unsigned long)M4Ipc_GetProducerStackFree(),
-         (unsigned long)M4Ipc_GetConsumerStackFree());
+         (unsigned long)uart_stack_free);
 
       LOG_INFO("SYS",
-         "M4EvtFree=%lu B M4WorkFree=%lu B Heap=%lu B MinHeap=%lu B",
-         (unsigned long)M4Ipc_GetEventProducerStackFree(),
-         (unsigned long)M4Ipc_GetEventWorkStackFree(),
+         "Heap=%lu B MinHeap=%lu B",
          (unsigned long)heap_free,
          (unsigned long)heap_min_free);
+      LOG_INFO("ADC",
+         "Voltage=%lu mV Error=%lu",
+         (unsigned long)voltage,
+         (unsigned long)adc_error_count);
 
-      LOG_INFO("SYS",
-         "SemProFree=%lu B SemConFree=%lu B MutexAFree=%lu B MutexBFree=%lu B",
-         (unsigned long)semproducer_stack_free,
-         (unsigned long)semconsumer_stack_free,
-         (unsigned long)mutex_a_stack_free,
-         (unsigned long)mutex_b_stack_free);
+      LOG_INFO("DMA",
+         "Half=%lu/%lu Full=%lu/%lu",
+         (unsigned long)adc_half_processed,
+         (unsigned long)adc_half_count,
+         (unsigned long)adc_full_processed,
+         (unsigned long)adc_full_count);
 
-      LOG_INFO("SYS",
-         "ISRWorkerFree=%lu B",
-         (unsigned long)isr_worker_stack_free);
+      LOG_INFO("DMA", "Late=%lu",
+         (unsigned long)adc_late_count);
 
 #if defined(M4_ENABLE_SPSC_TEST)
       LOG_INFO(
@@ -335,406 +253,121 @@ void StartUARTTask(void *argument)
   /* USER CODE END StartUARTTask */
 }
 
-/* USER CODE BEGIN Header_StartSemProducerTask */
+/* USER CODE BEGIN Header_StartAcquisitionTask */
 /**
-* @brief Function implementing the SemProducerTask thread.
+* @brief Function implementing the AcquisitionTask thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_StartSemProducerTask */
-void StartSemProducerTask(void *argument)
+/* USER CODE END Header_StartAcquisitionTask */
+void StartAcquisitionTask(void *argument)
 {
-  /* USER CODE BEGIN StartSemProducerTask */
-# if (RINGBUFFER_OR_SEMAPHORBINARY == 0U)
-  (void)argument;
-
-  uint32_t failures = 0U;
-  RingBufferStatus_t status;
-
-  /* 等待 Consumer 就绪 */
-  if (!RB_TestWait())
+  /* USER CODE BEGIN StartAcquisitionTask */
+  uint32_t flag;
+  uint32_t sum = 0U;
+  uint32_t adc_average = 0U;
+  if (HAL_ADC_Start_DMA(
+    &hadc1,
+    (uint32_t *)adc_buffer,
+    ADC_BUFFER_SIZE) != HAL_OK)
   {
-      LOG_INFO("RBTEST", "Producer sync FAIL");
-      for (;;) { osDelay(1000U); }
+      Error_Handler();
   }
 
-  RingBuffer_Init(&ring_buffer);
-
-  if (ring_buffer.overflow_count != 0U)
+  if (HAL_TIM_Base_Start(&htim2) != HAL_OK)
   {
-      failures++;
+      Error_Handler();
   }
-
-  /* 通知 Consumer 执行 Empty 测试 */
-  if (!RB_TestNotify(SemConsumerTaskHandle) ||
-      !RB_TestWait())
-  {
-      LOG_INFO("RBTEST", "Empty sync FAIL");
-      for (;;) { osDelay(1000U); }
-  }
-
-  /* ========== FULL 测试 ========== */
-
-  /* 容量为 7，写入 0～6 */
-  for (uint32_t i = 0U; i < 7U; i++)
-  {
-      status = RingBuffer_WriteByte(
-          &ring_buffer, i
-      );
-
-      if (status != RING_BUFF_OK)
-      {
-          failures++;
-      }
-  }
-
-  uint32_t old_head = ring_buffer.head;
-  uint32_t old_tail = ring_buffer.tail;
-  uint32_t old_overflow =
-      ring_buffer.overflow_count;
-
-  /* 第 8 次写入：应返回 FULL */
-  status = RingBuffer_WriteByte(
-      &ring_buffer, 7U
-  );
-
-  if (status != RING_BUFF_ERROR_FULL)
-  {
-      failures++;
-  }
-
-  if (ring_buffer.head != old_head ||
-      ring_buffer.tail != old_tail ||
-      ring_buffer.overflow_count != old_overflow + 1U ||
-      !RingBuffer_IsFull(&ring_buffer))
-  {
-      failures++;
-  }
-
-  LOG_INFO("RBTEST",
-            "FULL %s, overflow=%lu",
-            failures == 0U ? "PASS" : "FAIL",
-            (unsigned long)ring_buffer.overflow_count);
-
-  /* 通知 Consumer 读取 0、1 */
-  if (!RB_TestNotify(SemConsumerTaskHandle) ||
-      !RB_TestWait())
-  {
-      LOG_INFO("RBTEST", "Full sync FAIL");
-      for (;;) { osDelay(1000U); }
-  }
-
-  /* ========== WRAP-AROUND 写入 ========== */
-
-  /* 现在 head=7, tail=2 */
-
-  bool wrap_write_ok = true;
-
-  status = RingBuffer_WriteByte(
-      &ring_buffer, 7U
-  );
-  if (status != RING_BUFF_OK)
-  {
-      wrap_write_ok = false;
-  }
-
-  status = RingBuffer_WriteByte(
-      &ring_buffer, 8U
-  );
-  if (status != RING_BUFF_OK)
-  {
-      wrap_write_ok = false;
-  }
-
-  /* head: 7 -> 0 -> 1 */
-  if (ring_buffer.head != 1U ||
-      ring_buffer.tail != 2U ||
-      !RingBuffer_IsFull(&ring_buffer) ||
-      ring_buffer.overflow_count != 1U)
-  {
-      wrap_write_ok = false;
-  }
-
-  LOG_INFO("RBTEST",
-            "WRAP WRITE %s, head=%lu tail=%lu",
-            wrap_write_ok ? "PASS" : "FAIL",
-            (unsigned long)ring_buffer.head,
-            (unsigned long)ring_buffer.tail);
-
-  /* 通知 Consumer 验证 2～8 */
-  if (!RB_TestNotify(SemConsumerTaskHandle) ||
-      !RB_TestWait())
-  {
-      LOG_INFO("RBTEST", "Wrap sync FAIL");
-      for (;;) { osDelay(1000U); }
-  }
-
-  LOG_INFO("RBTEST", "Producer test finished");
-
-  for (;;)
-  {
-      osDelay(1000U);
-  }
-#else
-  for(;;)
-  {
-    osDelay(200U);
-
-    if(osSemaphoreRelease(SyncSemHandle) == osOK)
-    {
-      LOG_INFO("SYS",
-                "Producer Released");
-    }
-  }
-
-#endif
-  /* USER CODE END StartSemProducerTask */
-}
-
-/* USER CODE BEGIN Header_StartSemConsumerTask */
-/**
-* @brief Function implementing the SemConsumerTask thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_StartSemConsumerTask */
-void StartSemConsumerTask(void *argument)
-{
-  /* USER CODE BEGIN StartSemConsumerTask */
-# if (RINGBUFFER_OR_SEMAPHORBINARY == 0U)
-  (void)argument;
-
-  uint32_t value_acquired = 0U;
-  RingBufferStatus_t status;
-
-  bool empty_ok = true;
-  bool full_read_ok = true;
-  bool wrap_ok = true;
-
-  /* 通知 Producer：Consumer 已就绪 */
-  if (!RB_TestNotify(SemProducerTaskHandle) ||
-      !RB_TestWait())
-  {
-      LOG_INFO("RBTEST", "Consumer sync FAIL");
-      for (;;) { osDelay(1000U); }
-  }
-
-  /* ========== EMPTY 测试 ========== */
-
-  value_acquired = 0xA5U;
-
-  status = RingBuffer_ReadByte(
-      &ring_buffer, &value_acquired
-  );
-
-  if (status != RING_BUFF_ERROR_EMPTY ||
-      value_acquired != 0xA5U ||
-      !RingBuffer_IsEmpty(&ring_buffer) ||
-      ring_buffer.head != 0U ||
-      ring_buffer.tail != 0U)
-  {
-      empty_ok = false;
-  }
-
-  LOG_INFO("RBTEST",
-            "EMPTY %s",
-            empty_ok ? "PASS" : "FAIL");
-
-  /* 通知 Producer 开始 Full 测试 */
-  if (!RB_TestNotify(SemProducerTaskHandle) ||
-      !RB_TestWait())
-  {
-      LOG_INFO("RBTEST", "Full sync FAIL");
-      for (;;) { osDelay(1000U); }
-  }
-
-  /* ========== FULL 状态检查 ========== */
-
-  if (!RingBuffer_IsFull(&ring_buffer) ||
-      ring_buffer.head != 7U ||
-      ring_buffer.tail != 0U)
-  {
-      full_read_ok = false;
-  }
-
-  /* 读取 0、1，为回绕写入腾出空间 */
-  for (uint32_t i = 0U; i < 2U; i++)
-  {
-      status = RingBuffer_ReadByte(
-          &ring_buffer, &value_acquired
-      );
-
-      if (status != RING_BUFF_OK ||
-          value_acquired != i)
-      {
-          full_read_ok = false;
-      }
-  }
-
-  if (ring_buffer.head != 7U ||
-      ring_buffer.tail != 2U)
-  {
-      full_read_ok = false;
-  }
-
-  LOG_INFO("RBTEST",
-            "FULL READ %s",
-            full_read_ok ? "PASS" : "FAIL");
-
-  /* 通知 Producer 写入 7、8 */
-  if (!RB_TestNotify(SemProducerTaskHandle) ||
-      !RB_TestWait())
-  {
-      LOG_INFO("RBTEST", "Wrap sync FAIL");
-      for (;;) { osDelay(1000U); }
-  }
-
-  /* ========== WRAP-AROUND 读取 ========== */
-
-  /* 期望读取：2、3、4、5、6、7、8 */
-  for (uint32_t i = 2U; i <= 8U; i++)
-  {
-      value_acquired = 0xA5U;
-
-      status = RingBuffer_ReadByte(
-          &ring_buffer, &value_acquired
-      );
-
-      if (status != RING_BUFF_OK ||
-          value_acquired != i)
-      {
-          wrap_ok = false;
-      }
-  }
-
-  /* 读取完毕后应恢复 Empty */
-  if (!RingBuffer_IsEmpty(&ring_buffer) ||
-      ring_buffer.head != 1U ||
-      ring_buffer.tail != 1U)
-  {
-      wrap_ok = false;
-  }
-
-  /* 再次空读，确认不会返回旧数据 */
-  value_acquired = 0xA5U;
-
-  status = RingBuffer_ReadByte(
-      &ring_buffer, &value_acquired
-  );
-
-  if (status != RING_BUFF_ERROR_EMPTY ||
-      value_acquired != 0xA5U)
-  {
-      wrap_ok = false;
-  }
-
-  LOG_INFO("RBTEST",
-            "WRAP READ %s, head=%lu tail=%lu",
-            wrap_ok ? "PASS" : "FAIL",
-            (unsigned long)ring_buffer.head,
-            (unsigned long)ring_buffer.tail);
-
-  /* 通知 Producer 测试结束 */
-  if (!RB_TestNotify(SemProducerTaskHandle))
-  {
-      LOG_INFO("RBTEST", "Finish sync FAIL");
-  }
-
-  LOG_INFO("RBTEST", "Consumer test finished");
-
-  for (;;)
-  {
-      osDelay(1000U);
-  }
-#else
-  (void)argument;
-  for(;;)
-  {
-    LOG_INFO("SEM",
-              "Consumer Waiting");
-
-    if(osSemaphoreAcquire(SyncSemHandle, osWaitForever) == osOK)
-    {
-      LOG_INFO("SEM",
-                "Consumer Acquired");
-    }
-  }
-
-#endif
-  /* USER CODE END StartSemConsumerTask */
-}
-
-/* USER CODE BEGIN Header_StartMutexTaskA */
-/**
-* @brief Function implementing the MutexTaskA thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_StartMutexTaskA */
-void StartMutexTaskA(void *argument)
-{
-  /* USER CODE BEGIN StartMutexTaskA */
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1500);
+    flag = osThreadFlagsWait(ADC_FLAG_HALF | ADC_FLAG_FULL,
+                                      osFlagsWaitAny,
+                                      osWaitForever);
 
-    if(osMutexAcquire(SharedDataMutexHandle, osWaitForever) == osOK)
+    if ((flag & osFlagsError) != 0U)
     {
-      uint32_t before = shared_value;
-
-      shared_value += 1U;
-
-      uint32_t after = shared_value;
-      uint32_t seq = ++shared_op_seq;
-      osMutexRelease(SharedDataMutexHandle);
-
-      LOG_INFO("M4M",
-               "seq=%lu A value=%lu->%lu",
-               (unsigned long)seq,
-               (unsigned long)before,
-               (unsigned long)after);
+        Error_Handler();
     }
-  }
-  /* USER CODE END StartMutexTaskA */
-}
 
-/* USER CODE BEGIN Header_StartMutexTaskB */
-/**
-* @brief Function implementing the MutexTaskB thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_StartMutexTaskB */
-void StartMutexTaskB(void *argument)
-{
-  /* USER CODE BEGIN StartMutexTaskB */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1500);
-
-    if(osMutexAcquire(SharedDataMutexHandle, osWaitForever) == osOK)
+    if ((flag & ADC_FLAG_HALF) != 0U)
     {
-      uint32_t before = shared_value;
+        if (osKernelGetTickCount() - adc_half_tick >= 200U)
+        {
+            adc_late_count++;
+        }
+        sum = 0U;
 
-      shared_value += 10U;
+        for(int i = 0; i < 10; i++)
+        {
+            sum += adc_buffer[i];
+        }
+        adc_half_processed++;
 
-      uint32_t after = shared_value;
-      uint32_t seq = ++shared_op_seq;
-      osMutexRelease(SharedDataMutexHandle);
-
-      LOG_INFO("M4M",
-               "seq=%lu B value=%lu->%lu",
-               (unsigned long)seq,
-               (unsigned long)before,
-               (unsigned long)after);
+        adc_average = sum / 10U;
+        voltage = (adc_average * 3300U + 2047U) / 4095U;
     }
+
+    if ((flag & ADC_FLAG_FULL) != 0U)
+    {
+        if (osKernelGetTickCount() - adc_full_tick >= 200U)
+        {
+            adc_late_count++;
+        }
+        sum = 0U;
+
+        for(int i = 10; i < 20; i++)
+        {
+            sum += adc_buffer[i];
+        }
+        adc_full_processed++;
+
+        adc_average = sum / 10U;
+        voltage = (adc_average * 3300U + 2047U) / 4095U;
+    }
+
   }
-  /* USER CODE END StartMutexTaskB */
+  /* USER CODE END StartAcquisitionTask */
 }
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
+void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc)
+{
+    if(hadc->Instance == ADC1)
+    {
+        adc_half_count++;
+        adc_half_tick = osKernelGetTickCount();
+        if(AcquisitionTaskHandle != NULL)
+        {
+            osThreadFlagsSet(AcquisitionTaskHandle,
+                            ADC_FLAG_HALF);
+        }
+    }
 
+
+}
+
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
+{
+    if (hadc->Instance == ADC1)
+    {
+        adc_full_count++;
+        adc_full_tick = osKernelGetTickCount();
+        if(AcquisitionTaskHandle != NULL)
+        {
+            osThreadFlagsSet(AcquisitionTaskHandle,
+                             ADC_FLAG_FULL);
+        }
+    }
+}
+
+void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *hadc)
+{
+    if (hadc->Instance == ADC1)
+    {
+
+        adc_error_count++;
+    }
+}
 /* USER CODE END Application */

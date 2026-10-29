@@ -19,17 +19,9 @@ typedef enum
 {
     M4_IPC_OK = 0,
     M4_IPC_ERROR_QUEUE_CREATE,
-    M4_IPC_ERROR_PRODUCER_CREATE,
-    M4_IPC_ERROR_CONSUMER_CREATE,
-    M4_IPC_ERROR_EVENT_WORK_CREATE,
-    M4_IPC_ERROR_EVENT_PRODUCER_CREATE
 } M4IpcStatus_t;
 
-M4IpcStatus_t M4Ipc_Init(void);
-uint32_t M4Ipc_GetProducerStackFree(void);
-uint32_t M4Ipc_GetConsumerStackFree(void);
-uint32_t M4Ipc_GetEventProducerStackFree(void);
-uint32_t M4Ipc_GetEventWorkStackFree(void);
+osMessageQueueId_t M4Ipc_Init(void);
 
 #ifdef __cplusplus
 }

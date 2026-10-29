@@ -186,7 +186,7 @@
 - 决策：保持仓库现有 `text eol=lf` 规则和 `core.autocrlf=false`；CubeMX 生成 CRLF 后先备份，再只对需要 LF 的文件做字节级 CRLF → LF，审核普通 Diff / 忽略行尾 Diff 与 `git diff --check`。
 - 原因：本次 Generate Code 曾使大量 FreeRTOS 中间件文件显示为修改，但归一化后真实变化只集中在 TIM7 配置与接入文件。
 - 影响：不得使用 `git reset --hard`、不审查就 `git add .`、或全库 `git add --renormalize .` 来清理本次工作区；重新生成后先确认 `.ioc` 的 TIM7.Period 与 `Src/tim.c` 的 ARR 一致。
-- 资料一致性待办：既有 Ring Buffer 文档写成 `uint8_t` / 有效 7 B，而 2026-10-17 早期源码快照 `ring_buffer.h` 出现 `uint32_t buffer[8]` / 有效 7 个元素。此处作为待复核事实差异记录，**不要在未检查最新头文件前静默改动已验收的历史报告**。
+- 资料一致性待办：既有 Ring Buffer 文档写成 `uint8_t` / 有效 7 B，而 2026-10-17 早期源码快照 `ring_buffer.h` 出现 `uint32_t buffer[8]` / 有效 7 个元素。
 
 
 ## DEC-20261027-01：Ring Buffer Task ↔ Task SPSC 使用 C11 原子索引及独立压力验证
@@ -208,3 +208,45 @@
 - 原因：便于未来 M5/M14 持续回归，同时避免默认固件永久运行 50,000 元素压力任务、污染资源与时序指标。
 - 验证要求：显式设置 OFF 并重新配置 CMake、Clean Build、烧录，确认无 `[SPSC] START` 且其他 M4 模块仍正常；本要求目前未附明确验收记录。
 - 合并策略：先从独立 SPSC 分支通过 PR 合入 M4 分支，完成系统级验收与文档，之后才考虑 M4 → `main`；不得仅凭独立分支 clean 就宣布 M4 已关闭。
+
+
+## DEC-20261028-01：M5 正式运行态直接清理 M4 演示任务，复用模块与历史证据分离
+
+- 状态：已接受；默认双任务模式通过板级验证。
+- 决策：直接从 CubeMX / `freertos.c` 删除 M4 教学用 Semaphore、Mutex、Queue、Task Flags、ISR Worker 演示任务的默认创建及无业务用途的同步对象、全局变量，不为每个实验任务增加永久开关。保留经过验证的 Ring Buffer 与 Debug Logger；`m4_ipc`、`m4_isr` 仅保留有意义的接口 / 声明，默认不进行演示初始化。独立 SPSC 测试继续由 `M4_ENABLE_SPSC_TEST` 条件控制，不在正式运行态自动启动。
+- 原因：实验已经有 M4 分支、PR、Git 提交及测试文档作为可回溯证据；让大量教学任务常驻正式固件会消耗 FreeRTOS Heap / Stack、调度时间、日志带宽，并干扰之后的 ADC 实时采集验证。
+- 实现边界：在 `.ioc` 配置应用任务；`freertos.c` 管理入口和调用；较复杂采集/通信逻辑放到独立业务模块，不能把“任务定义分文件”一概视为坏设计。HAL TIM6 Timebase 必须保持，TIM7 的旧资源配置待 M5 规划时再审核。
+- 验证：2026-10-28 用户确认实际应用任务为 2；30 秒日志 882 → 9 行、Free Heap 3432 → 13504 B，NRST ×3、Power-cycle ×3 均通过；当前 Debug 增量构建成功。
+- 影响：替代 M4 开发阶段“所有实验任务在同一运行固件里常驻”的临时组织方式，不否定 `DEC-20261027-01` 和 `DEC-20261027-02` 的历史 SPSC 并发验证及可选测试机制。尚未产生本轮功能提交号。
+
+## DEC-20261028-02：M5 运行状态使用低频 UART 摘要，先保存清理前后资源证据
+
+- 状态：已接受，M5-P0 低频输出已实机观察。
+- 决策：默认 `UARTTask` 每 10 次周期循环汇总一次 UART / Stack / Heap 状态，删除演示任务的逐事件输出；继续使用 `debug_log` 的互斥保护，而非在 ISR 中执行阻塞串口日志。
+- 原因：原正式串口 30 秒内有 882 行（约 29.4 行/s），降低日志负荷有利于定位系统运行状态，并为后续定时采样和吞吐测试降低干扰。
+- 证据：同样约 30 秒窗口的新固件只输出 9 行（约 0.3 行/s）；Current/Minimum Ever Free Heap 均观察为 13504 B，UART 栈最小可见剩余 520 B。
+- 影响与限制：保留错误/告警输出能力；后续 ADC 不应逐样本同步 UART 输出。当前仅完成短时板级验证，未证明采集路径实时性或长期无内存泄漏。
+
+## DEC-20261028-03：M5 采用 TIM2 TRGO 硬件定时触发 ADC1_IN1 + DMA Circular
+
+- 状态：已接受；M5-P1/P2 板级采样与电压变化验证通过。
+- 决策：选用 TIM2 内部计数、TRGO Update 硬件触发 ADC1 Regular Channel 1（PA1），不在 TIM2 更新中断内逐次软件启动 ADC。TIM2 时钟 84 MHz、PSC=8399、ARR=199，设计 50 Hz；单通道 12-bit ADC，Sampling Time 为 84 cycles、ADC 时钟 21 MHz；DMA2 Stream0 外设到内存、Half Word、Circular、FIFO Disabled，缓冲区为 20 个 `uint16_t`。
+- 原因：PA0 同时具有 WKUP 功能，使用 PA1 减少引脚冲突；TIM2 TRGO 是本 MCU ADC 规则转换可用的外部触发路径，减少每个样本的软件定时抖动；DMA 自动写 SRAM 以降低 CPU 搬运负担。
+- 验证：电位器（10 kΩ）从最低到最高端获得 `2～3287 mV` 的有效变化；Half/Full 回调按规律计数，ADC Error 为 0；频率由约 10 秒回调增量核对，不作为精密频率校准。
+- 影响/边界：TIM6 保留 HAL Timebase；DMA buffer 必须放在 DMA 可访问的 SRAM（非 CCMRAM）。当前固定 3300 mV 换算属于估算，未通过外部校准或精确度验收。
+
+## DEC-20261029-01：M5 初版只保留一个采集 Task 与轻量 Thread Flags 通知
+
+- 状态：已接受；正常数据采集功能已实测。
+- 决策：从 M5-P0 的 HeartBeat、UART 双任务状态新增 `AcquisitionTask`（保留当前源码生成命名），在此 Task 启动 ADC DMA 后启动 TIM2；DMA Half/Full 回调仅进行计数、Tick 记录及 `osThreadFlagsSet()`，Task 收到标志后各处理 10 个 ADC 样本并计算平均毫伏值；UART 每约 10 秒打印汇总，不在 ADC/DMA ISR 阻塞打印。
+- 原因：将硬件数据采集与 FreeRTOS 业务处理职责分离，复用 M4 已验证的 Thread Flags 基础，优先打通最小完整采集链，不提前引入 Queue、额外处理任务或复杂软件多缓冲。
+- 验证：正常模式 Half/Full 处理计数与回调计数对齐、Error=0、Late=0；FreeRTOS Heap/MinHeap `12368 B`，LED/UART 正常。
+- 影响/边界：`Thread Flags` 相同 bit 会合并，计数相等与暂时无 Error 都不是逐样本绝对无丢失的证明。若后续确需更强完整性，再按需求增设序号/所有权管理，不在当前已完成功能上盲目扩展。
+
+## DEC-20261029-02：以 0/50/250 Tick 人为延时和 Late 计数验证初步实时性边界
+
+- 状态：已接受；压力注入与恢复验证已完成。
+- 决策：在 `osThreadFlagsWait()` 返回后、读取 DMA 半区前临时加入 `osDelay()`，分别测试 0/50/250 Tick；增加 Callback 与 Processed 独立累计计数，以及基于各半区最近一次回调 Tick 的 Late 指标；测试结束恢复正常采集无人工延时版本。
+- 原因：使用最少改动揭示任务处理及时性与 DMA 硬件运行独立性，不把 ADC Error 当作软件缓存数据完整性结论。
+- 验证：0/50 Tick 时 Late=0；250 Tick 时 Late=`27→57→87`；正常模式恢复后 `Half=73/73 Full=72/72 Late=0 Error=0`。
+- 影响/边界：Late 采用最近回调时间戳，重复通知可能覆盖时间戳；当前结果证明超时检测对人为延时有响应，不能确定准确的覆盖元素数量或证明最大负载无丢失。Tick=毫秒需依据 `configTICK_RATE_HZ` 校准。

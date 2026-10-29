@@ -2,56 +2,45 @@
 
 > 唯一回答：这周准备干什么？
 > 周期：2026-10-26 至 2026-11-01。每周更新一次。
-> 状态校准：2026-10-27；只将实际板级/提交证据标记完成，PR 与复位验收未确认前不写为完成。
+> 状态校准：2026-10-29；M5-P0 功能/文档已提交并推送，M5-P1～P5 基础采集链与板级回归通过；本轮 ADC 功能/文档仍待 Git 归档。
 
 ## Current Milestone
 
-M4：RTOS 通信、同步和数据缓冲，当前进入最终合并/关闭准备，**尚未正式关闭**。M0～M3 已完成。
-
-M4.1 Queue、M4.2 Task Flags、M4.3 Semaphore/Mutex、M4.4 Ring Buffer 基础功能、M4.5 TIM7 ISR → Task 均有板级基线；2026-10-27 新增 **Task ↔ Task SPSC 并发 50,000 元素 PASS**，功能 checkpoint `d93665e` 在独立分支。
-
-本周不进入 M5 ADC + Timer + DMA 业务实现，先完成当前 SPSC 分支合并和正式 M4 基线验收。
+M5：ADC + Timer + DMA 实时数据采集。本周从 M5-P0 清理正式运行态过渡到 PA1/ADC1 + TIM2 TRGO + DMA2 Circular + FreeRTOS 的最小连续采集链，已完成规定的电压变化、延时压力和用户报告的长时间/复位回归。
 
 ## 本周核心目标
 
-- 以最新 SPSC 并发测试补齐 Ring Buffer 在 M4 关闭前的指定验证缺口。
-- 记录 Full/Empty 背压、连续数据序号、C11 原子索引、Stack/Heap 与现有模块联合运行证据。
-- 确认 `M4_ENABLE_SPSC_TEST=OFF` 的正式固件可重新 clean build 与烧录运行。
-- 在证据齐全后通过 PR 将 SPSC 并入 M4，完成文档和最终回归，再决定是否关闭 M4。
+- 完成 M5-P0 任务与日志精简、板级验收及独立 Git Checkpoint（已完成）。
+- 以 10 kΩ 电位器建立 TIM2 硬件触发 ADC1_IN1 的 50 Hz（设计值）采样链，DMA Half/Full 唤醒 FreeRTOS Acquisition Task（已完成）。
+- 观察电压全量程变化、回调与处理计数，使用 0/50/250 Tick 延时验证 Late 对任务处理超时的响应，并恢复正式无人工延时版本（已完成）。
+- 完成长时间运行与六次复位验收（用户报告通过），整理实测数据与已知边界，最后将 ADC 功能与九份文档分别提交推送（归档待完成）。
 
 ## 本周任务
 
-1. 已完成：基于干净仓库创建独立 `feature/m4-spsc-concurrency-verification` 分支。
-2. 已完成：`ring_buffer.h/.c` 的 C11 `_Atomic` head/tail 和 acquire/release SPSC 内存序调整，元素为 `uint32_t`，有效容量 7 个元素。
-3. 已完成：新增两独立 SPSC Task 以及 `M4_ENABLE_SPSC_TEST` 可选 CMake 开关（默认 OFF），保持 Semaphore Task 职责分离。
-4. 已完成：板级 `PASS sent=50000 recv=50000 full=7064 empty=7419`、`overflow=7064 elapsedTicks=7501`。
-5. 已完成：同窗口验证 M4Q、M4F、Semaphore、Mutex、TIM7 ISR 正常，采样 Heap/MinHeap 3432 B、SPSC P/C Stack 剩余 876/444 B。
-6. 已完成：功能独立提交 `d93665e` 并推送 origin；用户确认工作区干净。
-7. 待提供证据：SPSC 版本 NRST ×3、Power-cycle ×3 与 SPSC PASS 后的其他模块持续运行终点记录。
-8. 待提供证据：显式 `M4_ENABLE_SPSC_TEST=OFF` 后 clean build、烧录、无 `[SPSC] START` 的正式回归。
-9. 待完成：SPSC → M4 Pull Request 审查、合并、更新本地 M4 分支与合并后板级检查。
-10. 进行中：九份 Markdown 的 M4 Final Integration / SPSC 记录更新；导入仓库后核对 Diff 和提交独立 docs checkpoint。
-11. 待完成：确认 M4 最终验收边界及 PR M4 → main；通过后再计划 M5 分支。
+1. 已完成：M4 PR #4 / #5 合并记录核对，M5 工作分支 `feature/m5-adc-timer-dma-baseline` 建立；M5-P0 功能 `942fcc3`、文档 `e7f525c` 均已推送且上次 Git 工作区确认 clean。
+2. 已完成：M5-P0 精简为 HeartBeat / UART 两应用任务；30 秒 UART 882→9 行，Free Heap 3432→13504 B；NRST ×3 / Power-cycle ×3 通过。
+3. 已完成：TIM2 84 MHz / PSC8399 / ARR199 / TRGO Update，ADC1_IN1（PA1）、DMA2 Stream0 Circular；10 kΩ 电位器完整接线与 Sampling Time 84 cycles 设置。
+4. 已完成：新增第三应用任务 `AcquisitionTask`，使用 DMA Half/Full Callback → Thread Flags → 10 点平均电压 → UART；电位器记录 `2～3287 mV`，Error=0。
+5. 已完成：A=0 Tick / B=50 Tick 时 Late=0；C=250 Tick 人为延时 Late 从 27→57→87，恢复无延时后 `Half=73/73 Full=72/72 Late=0 Error=0`。
+6. 已完成：最终增量 Debug 构建成功（RAM 21448 B、Flash 35680 B）、Heap/MinHeap 12368 B，用户确认长时间运行、NRST ×3、Power-cycle ×3 通过。
+7. 待完成：审查并归档本轮 ADC `.ioc` / HAL 生成源 / FreeRTOS Task / CMake 的有效代码差异；按功能、文档独立提交并推送，核对新 HEAD、工作区 clean。
+8. 可选补测：Clean Build（`--clean-first`）、真实长时间运行精确时长及电压校准记录；不能预先标 PASS。
 
 ## 验收标准
 
-- Task ↔ Task SPSC 实际发送/接收同为 50,000，且顺序无错、Full 和 Empty 被实测触发；Full 重试不误写为最终数据丢失。
-- `SpscPFree=876 B`、`SpscCFree=444 B` 和 Heap 3432 B 来自板级采样，不将静态 RAM 与 FreeRTOS Heap 混淆。
-- SPSC 只以一个 Producer 写 head、一个 Consumer 写 tail；不能推广到 ISR ↔ Task / DMA / MPSC。
-- 原 M4 Queue、Flags、Semaphore、Mutex、TIM7 ISR 运行不受本轮测试影响（以日志窗口为准）。
-- 正式固件显式关闭 SPSC 测试后重新生成、烧录并通过回归，缓存选项不残留 ON。
-- 最终复位/上电重启和合并后验收均有独立记录，Git HEAD / Branch 与文档当前状态一致。
-- 未完成的 PR、NRST 和 Power-cycle 不得写成已完成。
+- 已提供的日志证明周期采样与电位器数据变化正常，Half/Full Callback 和 Processed 计数在正式模式下匹配；`Error=0`、`Late=0`。
+- 0/50/250 Tick 测试对比有可复现实测记录；250 Tick 检测到超时风险，正式固件不留人为测试延时。
+- 长时间运行与 6 次复位测试由用户报告通过，记录实际证据边界，不能虚构分钟数或逐样本无丢失结论。
+- 代码与 docs 的 Git 提交必须经 Diff、暂存区、EOL 审核后产生；当前不将 ADC 功能虚记为已 Commit/Push。
 
 ## 风险
 
-- 临时测试与正式固件配置不同；构建 Cache 保留 `ON` 会导致测试任务意外存在。
-- SPSC 当前 Consumer 剩余 Stack 444 B，Semaphore 任务剩余 Stack 288 B，M5 增加业务前必须重新测量。
-- `overflow_count` 当前统计失败写入尝试，并非业务丢样计数；需要另设真实丢样指标。
-- C11 原子 SPSC 只覆盖一个 Producer/一个 Consumer，ISR/DMA 生产侧不可直接照搬结论。
-- CubeMX 再生成易引入 CRLF/LF 噪音，保留备份和定向处理流程。
-- 单次 `7501 ticks` 的测试不代替长期满载、复位与工业级最坏延迟验收。
+- DMA Circular 继续写入内存，不因 FreeRTOS 任务阻塞而等待；Thread Flags 可能合并，同步计数与 Late=0 都不能严格证明从未覆盖样本。
+- ADC 以 3300 mV 假定参考值换算，尚无万用表/校准源精度验证；输出间隔缺乏精确时间戳，不把日志推算当计量级频率精度。
+- DMA 回调 ISR 不能调用阻塞 UART Logger；NVIC 优先级须满足实际 RTOS ISR API 约束。
+- CubeMX 再生成可能带来大量 CRLF/LF 无关变更，需分离第三方源码噪声与有效配置，不无审查 `git add .`。
+- 长时间运行时长未量化；基本验收不替代极端负载和工业可靠性专项认证。
 
 ## 可选
 
-M4 经验证合并后再准备 M5 ADC/Timer/DMA 资源冲突清单、Half/Full 数据所有权图和吞吐预算；不提前实现 M5 业务逻辑。
+若归档前仍有精力，可补做一次干净 Debug 构建并测定准确 RTOS Tick 频率；在不影响主线情况下，规划未来的逐半块序号/所有权验收，不急于引入新 Task 或 Queue。
