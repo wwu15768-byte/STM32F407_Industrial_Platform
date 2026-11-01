@@ -19,6 +19,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "FreeRTOS.h"
+#include "cmsis_os2.h"
 #include "task.h"
 #include "main.h"
 #include "cmsis_os.h"
@@ -34,6 +35,7 @@
 #include "tim.h"
 #include <stdatomic.h>
 #include <stdint.h>
+#include <string.h>
 #include <stddef.h>
 #include <stdio.h>
 #if defined(M4_ENABLE_SPSC_TEST)
@@ -50,11 +52,19 @@
 /* USER CODE BEGIN PD */
 #define ADC_FLAG_HALF (1UL << 0)
 #define ADC_FLAG_FULL (1UL << 1)
+
+#define M6_RX_DMA_SIZE      64U
+#define M6_RX_QUEUE_DEPTH   64U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-
+typedef struct M6_Rx_Packet
+{
+  uint16_t size;
+  uint32_t event;
+  uint8_t data[M6_RX_DMA_SIZE];
+} M6_RxPacket_t;
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -72,6 +82,26 @@ volatile uint32_t adc_full_processed = 0U;
 volatile uint32_t adc_half_tick = 0U;
 volatile uint32_t adc_full_tick = 0U;
 volatile uint32_t adc_late_count = 0U;
+
+static volatile uint32_t m6_rx_count = 0U;
+static volatile uint32_t m6_rx_drop = 0U;
+static volatile uint32_t m6_start_fail = 0U;
+static volatile uint32_t m6_last_size = 0U;
+static volatile uint32_t m6_last_event = 0U;
+static volatile uint32_t last_logged_count = 0U;
+static volatile uint8_t m6_last_data[M6_RX_DMA_SIZE];
+static osMessageQueueId_t m6_rx_queue = NULL;
+static uint8_t m6_dma_rx_buf[M6_RX_DMA_SIZE];
+
+
+static volatile uint32_t m6_uart_error_count = 0U;
+static volatile uint32_t m6_uart_pe_count = 0U;
+static volatile uint32_t m6_uart_ne_count = 0U;
+static volatile uint32_t m6_uart_fe_count = 0U;
+static volatile uint32_t m6_uart_ore_count = 0U;
+static volatile uint32_t m6_uart_dma_error_count = 0U;
+static volatile uint32_t m6_uart_last_error = 0U;
+
 
 /* USER CODE END Variables */
 /* Definitions for HeartBeatTask */
@@ -98,6 +128,55 @@ const osThreadAttr_t AcquisitionTask_attributes = {
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
+static HAL_StatusTypeDef M6_UART_RxStart(void)
+{
+  HAL_StatusTypeDef status;
+
+  status = HAL_UARTEx_ReceiveToIdle_DMA(
+    &huart2,
+    m6_dma_rx_buf,
+    M6_RX_DMA_SIZE);
+
+  if(status == HAL_OK)
+  {
+    /* close Half Transfer interrupt in proccess 1 */
+    __HAL_DMA_DISABLE_IT(huart2.hdmarx, DMA_IT_HT);
+  }
+
+  return status;
+}
+
+
+static void M6_UART_RecordError(uint32_t error)
+{
+    m6_uart_last_error = error;
+    m6_uart_error_count++;
+
+    if ((error & HAL_UART_ERROR_PE) != 0U)
+    {
+        m6_uart_pe_count++;
+    }
+
+    if ((error & HAL_UART_ERROR_NE) != 0U)
+    {
+        m6_uart_ne_count++;
+    }
+
+    if ((error & HAL_UART_ERROR_FE) != 0U)
+    {
+        m6_uart_fe_count++;
+    }
+
+    if ((error & HAL_UART_ERROR_ORE) != 0U)
+    {
+        m6_uart_ore_count++;
+    }
+
+    if ((error & HAL_UART_ERROR_DMA) != 0U)
+    {
+        m6_uart_dma_error_count++;
+    }
+}
 
 /* USER CODE END FunctionPrototypes */
 
@@ -134,6 +213,21 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
+
+  m6_rx_queue = osMessageQueueNew(M6_RX_QUEUE_DEPTH,
+                                  sizeof(M6_RxPacket_t),
+                                  NULL);
+  if(m6_rx_queue != NULL)
+  {
+    if(M6_UART_RxStart() != HAL_OK)
+    {
+      m6_start_fail++;
+    }
+  }
+  else
+  {
+    m6_start_fail++;
+  }
   /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
 
@@ -194,10 +288,38 @@ void StartUARTTask(void *argument)
 {
   /* USER CODE BEGIN StartUARTTask */
   static uint32_t stack_sample_count = 0U;
+
+/* M6 stress test code */
+#if 0
+  M6_UART_RecordError(
+      HAL_UART_ERROR_FE |
+      HAL_UART_ERROR_ORE
+  );
+#endif
+
   /* Infinite loop */
   for(;;)
   {
+    if(m6_rx_queue != NULL)
+    {
+      M6_RxPacket_t packet;
 
+      while(osMessageQueueGet(m6_rx_queue,
+                              &packet,
+                              NULL,
+                              0U) == osOK)
+      {
+        for(uint16_t i = 0; i < packet.size; i++)
+        {
+          m6_last_data[i] = packet.data[i];
+
+        }
+
+        m6_last_size = packet.size;
+        m6_last_event = packet.event;
+        m6_rx_count++;
+      }
+    }
     /*
     检测剩余栈与运行状态
     */
@@ -225,20 +347,49 @@ void StartUARTTask(void *argument)
          "Heap=%lu B MinHeap=%lu B",
          (unsigned long)heap_free,
          (unsigned long)heap_min_free);
-      LOG_INFO("ADC",
-         "Voltage=%lu mV Error=%lu",
-         (unsigned long)voltage,
-         (unsigned long)adc_error_count);
 
-      LOG_INFO("DMA",
-         "Half=%lu/%lu Full=%lu/%lu",
-         (unsigned long)adc_half_processed,
-         (unsigned long)adc_half_count,
-         (unsigned long)adc_full_processed,
-         (unsigned long)adc_full_count);
+      if (m6_rx_count != last_logged_count)
+      {
+          last_logged_count = m6_rx_count;
 
-      LOG_INFO("DMA", "Late=%lu",
-         (unsigned long)adc_late_count);
+          LOG_INFO("RXM",
+                  "Size=%lu Event=%lu Count=%lu Drop=%lu StartFail=%lu",
+                  (unsigned long)m6_last_size,
+                  (unsigned long)m6_last_event,
+                  (unsigned long)m6_rx_count,
+                  (unsigned long)m6_rx_drop,
+                  (unsigned long)m6_start_fail);
+
+          LOG_INFO("RXE",
+             "Total=%lu PE=%lu NE=%lu FE=%lu ORE=%lu DMA=%lu Last=0x%08lX",
+             (unsigned long)m6_uart_error_count,
+             (unsigned long)m6_uart_pe_count,
+             (unsigned long)m6_uart_ne_count,
+             (unsigned long)m6_uart_fe_count,
+             (unsigned long)m6_uart_ore_count,
+             (unsigned long)m6_uart_dma_error_count,
+             (unsigned long)m6_uart_last_error);
+
+          for(uint32_t i = 0U; i < m6_last_size; i+=8U)
+          {
+            uint32_t n = m6_last_size - i;
+            char line[25] = {0};
+            if(n > 8U)
+            {
+              n = 8U;
+            }
+
+            for(uint32_t j = 0U; j < n; j++)
+            {
+              snprintf(&line[j * 3U],
+                   sizeof(line) - j * 3U,
+                   "%02x ",
+                   m6_last_data[i + j]);
+            }
+            LOG_INFO("RXM", "%s", line);
+          }
+      }
+
 
 #if defined(M4_ENABLE_SPSC_TEST)
       LOG_INFO(
@@ -248,7 +399,7 @@ void StartUARTTask(void *argument)
             (unsigned long)M4SpscTest_GetConsumerStackFree());
 #endif
     }
-    osDelay(1000U);
+    osDelay(10U);
   }
   /* USER CODE END StartUARTTask */
 }
@@ -370,4 +521,60 @@ void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *hadc)
         adc_error_count++;
     }
 }
+
+
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
+{
+  if(huart->Instance != USART2)
+  {
+    return;
+  }
+
+  uint32_t event = HAL_UARTEx_GetRxEventType(huart);
+
+  if(event == HAL_UART_RXEVENT_HT)
+  {
+    return;
+  }
+
+  if((Size > 0U) && (Size <= M6_RX_DMA_SIZE))
+  {
+    M6_RxPacket_t packet;
+
+    packet.size = Size;
+    packet.event = event;
+
+    memcpy(packet.data, m6_dma_rx_buf, Size);
+
+    if((m6_rx_queue == NULL) ||
+       (osMessageQueuePut(m6_rx_queue,
+                         &packet,
+                         0U,
+                         0U) != osOK))
+    {
+      m6_rx_drop++;
+    }
+
+    /* reopen acception after normal mode finished */
+    if(M6_UART_RxStart() != HAL_OK)
+    {
+      m6_start_fail++;
+    }
+
+  }
+}
+
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance != USART2)
+    {
+        return;
+    }
+
+    uint32_t error = HAL_UART_GetError(huart);
+
+    M6_UART_RecordError(error);
+}
+
 /* USER CODE END Application */
