@@ -2100,3 +2100,62 @@ Heap=3432 B        MinHeap=3432 B
 - 已知板级状态：恢复常规采集的串口窗口 `Error=0`、`Late=0`，Half/Full 已处理次数与回调次数一致、Heap/MinHeap 均为 `12368 B`。用户未附长时间运行全过程的逐时日志，也未提供准确持续分钟数或全部六次复位逐次原始串口记录。
 - 结论：**PASS（用户报告的既定长时间运行及六次复位回归）**。
 - 边界：不得将该记录写为“精确 30 分钟测试”“全天无丢样”或工业级安全/可靠性认证；最坏场景的逐样本完整性仍需更严格证据。
+
+## TEST-20261101-01：M6-P1 CubeMX RX DMA + IDLE 配置与 Git EOL 差异收敛
+
+- 目标：在 `feature/m6-baseline` 上添加 USART2 RX DMA/IRQ，保证 M6 有效修改可审计，不混入 CubeMX 行尾噪音。
+- 起点：用户已确认 `30b0072` 为 M5 PR #6 Merge HEAD，分支 `feature/m6-baseline` 初始与 `main`/对应远程引用同步且工作区 clean。
+- 关键配置：USART2 PD5/TX、PD6/RX，115200/8N1；RX DMA1 Stream5 Channel4、Peripheral-to-Memory、Normal、Byte 对齐、Memory Increment；开启 USART2 与 DMA1 Stream5 IRQ。HAL Timebase/FreeRTOS 及既有资源不作为本阶段修改目标。
+- 方法：CubeMX 生成后比较 `git diff --stat`、`git diff --ignore-space-at-eol --stat`、`git diff --check`、`git status -sb`；确认 HAL/FreeRTOS 等非目标变更属于 EOL/生成噪音并按备份/审核方式清理。
+- 实际结果：最终仅 5 个预期修改文件：`Inc/stm32f4xx_it.h`、`STM32F407_Industrial_Platform.ioc`、`Src/dma.c`、`Src/stm32f4xx_it.c`、`Src/usart.c`；`5 files changed, 78 insertions(+), 1 deletion(-)`；`git diff --check` 无输出。
+- 结论：**PASS（M6-P1 生成文件 Diff 收敛及基础配置证据）**。
+- 边界：本条不是 M6-P2 完整功能 Git 提交/推送确认；没有本轮最终 Debug Clean Build 的直接命令输出，不标记其独立通过。
+
+## TEST-20261101-02：M6-P2 Normal DMA + IDLE/TC 不定长接收与边界长度
+
+- 目标：验证 USART2 RX DMA Normal + IDLE 完成事件、64 B TC 边界和 ISR → Queue → UARTTask 数据交接。
+- 环境：STM32F407VGT6、USART2 115200/8N1、USB-TTL 3.3 V、DMA1 Stream5 Channel4 Normal、64 B RX Buffer；FreeRTOS CMSIS-RTOS2 消息队列按值传递。
+- 方法：单独发送 HEX 数据并比对长度、事件类型及字节顺序；任务记录 `m6_last_size`、`m6_last_event`、`m6_last_data` 与接收次数。
+- 实际结果：1 B (`01`)、4 B (`00 55 AA FF`)、6 B (`01 02 03 04 05 06`)、32 B (`00..1F`) 的短包/二进制数据显示完整，Event=2（IDLE）；64 B (`00..3F`) 内容顺序完整，Event=0（TC）。用户另外明确报告 31 B 和 63 B 测试通过，未提供独立原始日志片段。
+- 基础观察：正常间隔收发阶段 `Drop=0`、`StartFail=0`；尚无严格逐字节发送/消费总量测量。
+- 结论：**PASS（已测试长度与不定长 DMA RX 功能基线）**。
+- 边界：本项不证明无间隔连续流的端到端零丢字节；Normal DMA 在 IDLE/TC 后需要重新启动，不等于 Circular DMA。
+
+## TEST-20261101-03：M6-P2 错误统计修正及 11 次正常 ASCII 通信负向对照
+
+- 目标：证明正常 RxEvent 不再误触发错误记录，排除软件 FE/ORE 自检对真实错误计数的污染。
+- 修正前缺陷：错误记录函数误放进普通 RxEvent 回调，导致 `[RXE] Total` 与正常消息次数共同增长，`Last=0x00000000`。
+- 修正：用户确认已将记录函数调用从普通接收路径移除；关闭模拟 FE/ORE 自检，烧录/重新启动进行正常收发。
+- 方法：USART2 115200/8N1，串口助手 ASCII 模式发送文本 `01 02 03 04`（含 3 个空格，共 11 B）11 次；逐次检查接收内容和错误计数。
+- 典型记录：
+
+```text
+[I][RXM] Size=11 Event=2 Count=11 Drop=0 StartFail=0
+[I][RXE] Total=0 PE=0 NE=0 FE=0 ORE=0 DMA=0 Last=0x00000000
+[I][RXM] 30 31 20 30 32 20 30 33
+[I][RXM] 20 30 34
+```
+
+- 实际结果：11 次接收均按顺序完整显示 ASCII HEX 数据，`Count` 从 1 累加到 11，始终 `Drop=0 StartFail=0 Total=0`；未报告新增 FE/ORE/NE/PE/DMA 硬件错误。
+- 结论：**PASS（正常收发与错误计数语义修正的负向对照）**。
+- 边界：此测试只证明正常条件下未发生误计数，不是 FE/ORE 真实故障注入测试或 UART 错误后自动恢复验证。
+
+## TEST-20261101-04：M6-P2 8 格与 64 格 Queue 连续 ASCII 压力对照
+
+- 目标：用相同长文本发送模式量化消息队列入队失败与 RAM 开销，并确认此类软件丢弃与硬件 UART 错误统计应分别解读。
+- 环境：USART2 115200/8N1、DMA1 Stream5 Normal、64 B Buffer、UARTTask 周期性日志；8 格与 64 格两组分别运行。PC 串口工具使用 ASCII 发送由 `01 02 ... 10` 重复构成的长字符串。
+- 负载：两份原始日志各包含 13 次 `SEND ASCII`，每条记录正文 3599 字符，按日志文本统计总计 46787 字符/组。仅说明发送工具显示的有效文本规模，不等同于已证明 MCU 接收到全部字节；两组起始 `Count` 已非零，不可直接使用末次计数反推出准确漏字节数。
+
+| 项目 | Queue 深度 8 | Queue 深度 64 |
+| --- | ---: | ---: |
+| 最后可见已处理 `Count` | 747 | 753 |
+| 最后可见入队失败 `Drop` | 49 | 0 |
+| `StartFail` | 0 | 0 |
+| `[RXE] Total`/PE/NE/FE/ORE/DMA | 全部 0 | 全部 0 |
+| Heap / MinHeap | 11704 / 11704 B | 7672 / 7672 B |
+| UARTFree 最低可见值 | 344 B | 336 B |
+
+- 对比：增加 56 个队列元素，Free Heap 减少 `11704−7672=4032 B`，即 `4032/56=72 B`/元素，符合一个携带 64 B 内容与元数据的队列项及其分配开销的预期量级。
+- 主要发现：8 格组已确认软件入队失败；64 格组在同类可见负载中没有检测到 Queue Put 失败，表明扩容能缓解此阶段瞬时背压。两组 `StartFail=0` 和硬件错误计数全零，不等于 UART 连续流无丢字节。
+- 结论：**PASS（背压/扩容因果对照与资源测量）**；**FAIL/未达标（若以 8 格队列的零丢弃或现阶段连续流端到端无损为目标）**。64 格只可写作本轮 Queue Drop=0，不能写成绝对零丢字节。
+- 后续：M6-P3 引入 Circular DMA + 独立 `uint8_t` Ring Buffer；记录 DMA 回调报告字节数、缓存写入、消费和拒绝字节数；用已知总长度与序号/CRC 的原始二进制序列验证端到端完整性。

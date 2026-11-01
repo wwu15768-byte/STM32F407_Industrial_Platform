@@ -250,3 +250,26 @@
 - 原因：使用最少改动揭示任务处理及时性与 DMA 硬件运行独立性，不把 ADC Error 当作软件缓存数据完整性结论。
 - 验证：0/50 Tick 时 Late=0；250 Tick 时 Late=`27→57→87`；正常模式恢复后 `Half=73/73 Full=72/72 Late=0 Error=0`。
 - 影响/边界：Late 采用最近回调时间戳，重复通知可能覆盖时间戳；当前结果证明超时检测对人为延时有响应，不能确定准确的覆盖元素数量或证明最大负载无丢失。Tick=毫秒需依据 `configTICK_RATE_HZ` 校准。
+
+## DEC-20261101-01：M6-P2 以 DMA Normal + IDLE 和按值消息队列建立最小接收基线
+
+- 状态：已接受，基础功能板级验证通过；连续流无损不在本决策的已验收范围。
+- 决策：USART2（PD5/PD6、115200/8N1）RX 配置 DMA1 Stream5 Channel4、Peripheral-to-Memory、Normal、Byte 对齐与 USART2/DMA1 Stream5 IRQ。应用使用 `HAL_UARTEx_ReceiveToIdle_DMA()`，64 B 接收区，区分 IDLE、TC 与 HT；以 CMSIS-RTOS2 非阻塞消息队列按值传递接收区间，由已有 UARTTask 消费；阻塞 Logger 仍仅在任务上下文使用。
+- 原因：先验证从 UART DMA 中断到 FreeRTOS Task 的不定长收包、消息所有权和边界长度，避免直接引入 Circular DMA、多次回绕和协议解析等变量。
+- 验证：1/4/6/31/32/63/64 B 与二进制数据通过；64 B TC=0、短数据 IDLE=2；11 次 ASCII 11 B 正常通信 `Count=11 Drop=0 StartFail=0`。
+- 影响：此为 M6-P2 功能基线，不宣称传输报文必须一一对应 IDLE 事件；Normal DMA 每次结束后的重启窗口仍可能丢字节，不能据 `StartFail=0` 声明端到端无损。
+
+## DEC-20261101-02：UART 正常接收事件与真实错误统计分离
+
+- 状态：已接受，正常接收的错误计数误累加已修正并实测。
+- 决策：`HAL_UARTEx_RxEventCallback()` 只处理接收长度/事件和数据流；错误统计由 `HAL_UART_ErrorCallback()` 在有非零 `HAL_UART_ERROR_*` 标志时更新。关闭临时 FE/ORE 软件注入后才进行正式正常通信统计；ISR 内不进行同步日志输出。
+- 原因：曾将错误记录函数放在普通接收回调中，`TotalError` 随正常接收增加、LastError=0，造成误报。
+- 验证：2026-11-01 正常 ASCII 测试 11 次，每次 `Size=11 Event=2`，`Total=0 PE=0 NE=0 FE=0 ORE=0 DMA=0 Last=0x00000000`；两组压力日志亦始终为零。
+- 影响/边界：修正了正常工作时的错误统计语义；真实 FE/ORE 物理故障注入和 HAL/DMA 错误后自动恢复**尚未验收**。
+
+## DEC-20261101-03：消息队列扩容仅作为吞吐诊断，M6-P3 改用持续接收结构
+
+- 状态：已接受阶段性对照结论；M6-P3 目标结构待实现和板级验证。
+- 决策：用 8 格与 64 格消息队列对照测试消费背压，不将无限增大队列当作最终连续流方案；后续拟采用 USART2 Circular DMA + 独立 `uint8_t` 字节 Ring Buffer + Task 消费与溢出计数。M4 的 `uint32_t[8]` Task↔Task SPSC 历史模块保留，不直接作为 UART 字节流缓冲实现。
+- 原因：8 格组在 13 条长 ASCII 发送压力下已观察 `Drop=49`；64 格组 `Drop=0`，但额外占用 Free Heap 4032 B，Normal DMA 重启空窗未消除。
+- 影响：M6-P3 必须分清 DMA 已报告字节、成功缓存字节、消费字节及队列/Ring Buffer 拒绝次数；连续输入、回绕与端到端字节顺序的验证独立进行。即使软件队列没有满，也不能直接据此证明端到端零丢字节。

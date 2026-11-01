@@ -3,34 +3,32 @@
 > 唯一回答：项目现在在哪？
 > 更新时机：项目状态发生明显变化时。
 
-更新时间：2026-10-29
+更新时间：2026-11-01
 
 ## Current Milestone
 
-M5：ADC + Timer + DMA 实时数据采集子系统。M0～M4 已完成，M5-P0 的功能与文档提交已经推送；M5-P1～P5 **基础采样、FreeRTOS 处理、人工延时测试与用户报告的稳定性/重启回归均已完成**。当前重点是本轮 ADC 功能及测试文档的 Git 归档，不把此功能级验证扩大为工业级绝对无丢样证明。
+M6：USART2 DMA + IDLE 不定长通信。M0～M5 已完成基础里程碑；M5 已通过 PR #6 合并，用户在 M6 创建 `feature/m6-baseline`（起点 `30b0072`）。本轮 M6-P1 CubeMX 配置与 Git EOL 清理完成，M6-P2 Normal DMA + IDLE/TC 基础功能及队列压力对照已实测；M6-P3 Circular DMA + Ring Buffer 尚未开始。
 
-- M5-P0：运行时任务/日志清理完成、双任务基线验证并归档（`942fcc3`、`e7f525c`）。
-- M5-P1：PA1/ADC1_IN1、TIM2 TRGO Update、DMA2 Stream0 Circular 外设配置完成。
-- M5-P2：50 Hz（设计值）硬件触发、10 kΩ 电位器全量程变化、Half/Full Callback 验证通过。
-- M5-P3：Half/Full Callback/Processed 计数、Late 及 0/50/250 Tick 延时测试完成；250 Tick 成功触发 Late，恢复正常后 Late=0。
-- M5-P4：`AcquisitionTask`接入 Thread Flags 与 10 点平均电压处理，并通过板级正常模式验证。
-- M5-P5：用户确认长时间运行、NRST ×3、Power-cycle ×3 均正常；实际长时间测试的具体时长未提供。
+- M6-P1：USART2 PD5/PD6、115200/8N1；RX DMA1 Stream5 Channel4、Normal、Byte；启用 DMA1 Stream5 和 USART2 IRQ。生成代码有效 Diff 收敛到五个文件，`git diff --check` 无输出。
+- M6-P2：64 B Normal DMA `HAL_UARTEx_ReceiveToIdle_DMA`；IDLE（事件 2）与 TC（事件 0）经回调复制后交 CMSIS-RTOS2 Queue，UARTTask 消费。1/4/6/31/32/63/64 B、二进制顺序验证通过。
+- 修复：此前从普通 RxEvent 回调误调用错误统计函数，已纠正；11 次 ASCII `01 02 03 04`（11 B）正常接收，`Count=11 Drop=0 StartFail=0`、`TotalError=0`。
+- 压力对照：8 格 Queue `Count=747 Drop=49`、Heap=11704 B；64 格 Queue `Count=753 Drop=0`、Heap=7672 B；均 `StartFail=0`、USART Error 统计 0。本轮 Drop=0 仅说明软件入队无失败，不证明端到端字节完整。
+- 范围边界：M6 本阶段不与 M5 ADC/DMA2 新回归绑定；不因此改写 M5 既有验收，也不宣称当前 M6 固件重新验证了 M5。
 
 ## Current Goal
 
-保存并归档已通过基本验收的 M5 ADC 采集版本，核对生成代码、项目配置和 Git 变更；准备单独的 ADC 功能 Commit 与测试文档 Commit。当前最小已实测链路：
+完成 M6-P2 已验证基础能力的代码/文档 Git 归档后，进入 M6-P3 Circular DMA + 独立字节 Ring Buffer，解决 Normal DMA 重启空窗、回绕、连续输入和 Queue 背压。当前已验证的最小链路为：
 
 ```text
-TIM2 TRGO Update (84 MHz; PSC=8399; ARR=199; nominal 50 Hz)
-  -> ADC1_IN1 / PA1 (12-bit, 84 cycles sampling)
-  -> DMA2 Stream0 Circular (uint16_t[20], halves of 10)
-  -> HAL_ADC_ConvHalfCpltCallback / HAL_ADC_ConvCpltCallback
-  -> osThreadFlagsSet(HAL ADC callback context)
-  -> AcquisitionTask / osThreadFlagsWait
-  -> 10-sample average -> voltage (mV) -> UARTTask summary
+USART2 RX / PD6 / 115200 8N1
+  -> DMA1 Stream5 Channel4 / Normal / 64 B
+  -> HAL_UARTEx_RxEventCallback (IDLE/TC)
+  -> Copy RX payload / osMessageQueuePut(timeout=0)
+  -> CMSIS-RTOS2 Message Queue (8/64-depth experiments)
+  -> existing UARTTask / Count / Size / Event / Drop / StartFail
 ```
 
-ISR 中不进行阻塞 UART 输出；TIM6 继续承担 HAL Timebase，SysTick 用于 FreeRTOS Tick。`Error=0` 与处理计数匹配只能支持本次观测窗口的基础行为，不构成逐样本完整性证明。
+ISR 不进行阻塞日志；现有 USART2 阻塞 TX Logger 保留任务上下文调用。后续需要记录实际发送字节数与 MCU 消费字节数、序列连续性及所有软件丢弃源。
 
 ## Completed
 
@@ -300,10 +298,16 @@ ISR 中不进行阻塞 UART 输出；TIM6 继续承担 HAL Timebase，SysTick �
 - 最新 Debug 增量构建成功（RAM 21448 B / 16.36%，FLASH 35680 B / 3.40%，CCMRAM 0），Heap/MinHeap=12368 B，HeartFree=384 B，UARTFree 最低可见 512 B。
 - 用户确认当前 M5 采集固件长时间运行与 NRST ×3、Power-cycle ×3 均通过；时长未量化，不推断长期极端负载下逐样本无损。
 
+- 2026-10-27 M5 PR #6 已合并：`30b0072` 是 `Merge pull request #6 from wwu15768-byte/feature/m5-adc-timer-dma-baseline`，M6 分支从该已合并基线创建。
+- M6-P1 USART2 RX DMA + NVIC CubeMX 生成文件经 EOL 清理后仅 5 个有效改动，`git diff --check` 无输出。
+- M6-P2 Normal DMA+IDLE/TC 1、4、6、31、32、63、64 B 以及二进制测试通过；11 次 ASCII 11 B 正常接收与纠正后的零错误统计通过。
+- 8 格与 64 格 Queue 连续 ASCII 对照实验：最终 Drop 49→0，Heap 11704→7672 B；仅验证软件队列背压差异，仍未证明端到端零丢字节。
+
 ## In Progress
 
-- 本次 M5 ADC/TIM2/DMA 功能版本与测试文档尚未收到最终 Git Diff、Commit/Push 和新 HEAD 的用户确认；准备审查并归档。
-- 独立 `--clean-first` 构建、准确长时间运行时长、逐块缓冲区覆盖检测及精密 ADC 标定/频率测量尚未提供，按风险与未来专项需求处理；不把本轮既定基础功能回归重新判为失败。
+- M6-P2 已提供实机输出，但功能提交/文档提交、最新 Git HEAD / 工作区 clean 和 `cmake --build --preset Debug --clean-first` 最终终端输出尚未提供，先审核再归档。
+- M6-P3 计划将 Normal DMA 改为 Circular DMA，建立独立 `uint8_t` Ring Buffer 和可核对的 EventBytes/BufferedBytes/ConsumedBytes/DropBytes、序列错误统计；尚未编码与验收。
+- 真实 UART FE/ORE 故障注入及接收异常后恢复未做板级确认，可作为后续异常处理专项；本阶段不做 M5 ADC/DMA2 新回归。
 
 ## Blocked
 
@@ -311,35 +315,31 @@ ISR 中不进行阻塞 UART 输出；TIM6 继续承担 HAL Timebase，SysTick �
 
 ## Known Bugs
 
-- 当前 M5 ADC 正式采集日志未报告已确认且未解决的固件运行 Bug，`ADC Error=0`、`Late=0` 只代表给定窗口内未观察到对应错误。
-- 250 Tick 延时出现 Late=27→57→87，为故意压力测试下的预期超时现象，不判定为默认运行模式故障。
-- CubeMX 生成可能再引入 CRLF/LF 工作区噪音，仍须按 `ERR-20261018-01` 和 `ERR-20261028-01` 的规则逐文件核查。
-- TIM6 HAL Timebase 必须保留；TIM7 历史 M4 配置不等于当前 ADC 触发时钟，现采用 TIM2 TRGO。
-- DMA Circular 旧数据覆盖、Thread Flags 重复通知合并与逐块所有权尚未做严格的最坏场景证明，记录为 `KG-014` 技术边界，不虚构已发生的丢样 Bug。
+- 已修复：2026-11-01 M6 UART 错误统计函数误放在正常 RxEvent 中，导致 `TotalError` 误增。正常 ASCII 11 次收发后全部 `[RXE]` 计数为零；详见 `ERR-20261101-02`。
+- 已复现：M6-P2 8 格消息队列在持续压力下 `Drop=49`，64 格在本轮相同形式负载下 `Drop=0`；属于被观测到的软件入队失败和容量/消费压力问题（`ERR-20261101-03`）。
+- 已解决的工作区问题：CubeMX 再生成后的 CRLF/LF 噪音（`ERR-20261101-01`）。
+- 尚未证实也尚未排除：DMA Normal 每次完成后重启空窗可能漏字节；`StartFail=0`、`TotalError=0`、Queue Drop=0 不能替代端到端字节完整性验证。
 
 ## Current Branch
 
-- 当前开发分支：`feature/m5-adc-timer-dma-baseline`。
-- 最后一次用户实际确认同步且工作区 clean 的 Git HEAD：`e7f525c`（M5-P0 文档），其父级功能提交 `942fcc3`；当时 `origin/feature/m5-adc-timer-dma-baseline` 亦为 `e7f525c`。
-- main 与 `origin/main` 在最后确认时均为 `e793039`，标签 `m5-pre-cleanup-20261028` 指向该清理前基线。
-- **M5 ADC/TIM2/DMA 当前功能代码已构建、烧录和测试，但尚未收到本轮新 Git Commit/Push、最终工作区 clean 的终端证据**；不虚构新 Hash，也不把 M5 功能误记为已合并 main。
+- M6 当前开发分支：`feature/m6-baseline`，初始 HEAD `30b0072`，当时同为 `main` / `origin/main` 及 M6 远程起点，确认是 M5 PR #6 Merge Commit。
+- 最近一次明确的 M6 `git status -sb` / Diff 验证发生在 P1 EOL 清理完成后：五个预期生成文件修改，未提交；后续 UART RX 业务代码、队列深度对照和文档的 Git 状态尚无新终端证明。
+- **未提供 M6-P2 代码 Commit/Push、新 HEAD/clean 证据，不虚构提交号**。
 
 ## Last Verified Function
 
-最新验收：**M5 ADC1_IN1 + TIM2 TRGO + DMA2 Circular + FreeRTOS 采集链基础功能与用户报告的稳定性/复位回归**。
+最新验收：**M6-P2 USART2 DMA Normal + IDLE/TC 不定长接收的功能基线，以及 8/64 格消息队列的背压对照**。
 
-- 模拟输入：PA1 / ADC1_IN1，10 kΩ 电位器；电压逐步变化 `2, 612, 1065, 1451, 2250, 2974, 3287, 3285, 3286 mV`；结果为基于 3300 mV 假定参考值的估算，未做万用表准确度对照。
-- 采样：TIM2 PSC=8399、ARR=199，APB1 Timer Clock 84 MHz，设计 50 Hz；ADC1 12-bit、Sampling Time=84 cycles、External Trigger=TIM2 TRGO Rising；DMA2 Stream0 Circular、20 元素 / 每半区 10 元素。
-- 正式运行前后计数：最后 `Half=23/23→48/48→73/73`、`Full=22/22→47/47→72/72`，均为 Processed/Callback，`Late=0`、`Error=0`；约 10 秒间相同回调计数增加 25，符合设计级频率核对但非精密标定。
-- 人工延时：A 0 Tick Late=0；B 50 Tick Late=0（Half 最后 72/73）；C 250 Tick Late=27、57、87（最后 Half=72/73、Full=71/72）。延时放在 Wait 返回和读取 DMA Buffer 之间，可暴露晚读风险；这不等于已证明覆盖了多少原始样本。
-- 最新 Debug 构建 `cmake --build --preset Debug` 成功，RAM 21448 B（16.36%）、Flash 35680 B（3.40%）；动态 Heap/MinHeap 12368 B、HeartFree 384 B、UARTFree 最低可见 512 B；LED/UART 正常。
-- 用户报告长时间运行 PASS、NRST ×3 PASS、Power-cycle ×3 PASS；未提供确切运行时长或完整六次逐次日志。
-- 详细证据：`TEST-20261028-05`、`TEST-20261029-01`～`TEST-20261029-03`；风险边界：`KG-014`。
+- 单包：已确认 1/4/6/31/32/63/64 B，包含 `00 55 AA FF` 等二进制，已测数据长度/顺序与 IDLE/TC 事件符合预期。31/63 B 为用户直接确认通过。
+- 正常 ASCII：2026-11-01 发送 `01 02 03 04` 11 次，文本每次 11 B，正常接收十六进制 `30 31 20 30 32 20 30 33 20 30 34`，末次 `Count=11 Drop=0 StartFail=0`；全部 `[RXE]` 分类 0。
+- 压力：每组 13 条可见长 ASCII Send，每条文本 3599 字符。8 格：`Count=747 Drop=49 StartFail=0`、Heap/MinHeap=`11704/11704 B`、UARTFree 最低 `344 B`；64 格：`Count=753 Drop=0 StartFail=0`、Heap/MinHeap=`7672/7672 B`、UARTFree 最低 `336 B`。队列增 56 项，Heap 差 4032 B；`Count` 已含测试前后窗口数据，不能用其直接定量说明字节丢失率。
+- 本轮未测真实 FE/ORE 硬件故障、DMA 异步错误恢复、严格发送/消费总字节匹配、Circular DMA 回绕/覆盖。64 格测试仅验证观察窗口软件队列不丢弃，**不能声明 UART 端到端零丢字节**。
+- 原 M5 测试记录均保留在 `TEST-20261028-*` / `TEST-20261029-*`，本轮 M6 无需新 ADC 回归。
+- 详细记录：`TEST-20261101-01`～`TEST-20261101-04`；决策：`DEC-20261101-01`～`DEC-20261101-03`；故障：`ERR-20261101-01`～`ERR-20261101-03`；知识边界：`KG-015` / `KG-016`.
 
 ## Next Step
 
-1. 保持当前已经板级通过的无人工延时采集版本，不在归档前做无关优化或加入复杂模块。
-2. 检查 `git status --short`、`git diff --ignore-space-at-eol --stat`、`git diff --check`、`.ioc` / `adc.c` / `dma.c` / `tim.c` / `freertos.c` / CMake 的真实改动，排除 CubeMX EOL-only 噪音。
-3. 可选补做 `cmake --build --preset Debug --clean-first`，若执行需记录真实结果而非提前填写 PASS。
-4. 先审查并提交 ADC/TIM2/DMA/AcquisitionTask 功能代码，再审查并提交本次九份文档；推送 M5 功能分支，确认新 HEAD、upstream 与 clean working tree。
-5. 新任务里程碑由后续计划决定：严格逐块无损保障和绝对精度校准保留为已知边界，后续如果需要再设计，不把基本采样功能重复做一遍。
+1. 保留并审核 M6-P2 已验证代码；执行 `git status -sb`、`git diff --stat`、`git diff --check`、`cmake --build --preset Debug --clean-first`，只记录实际成功的构建/提交结果。
+2. 将 M6-P2 的 Normal DMA 功能基线与阶段压力测试文档分别暂存、检查 `git diff --cached --check` 和 `--stat`、提交并推送；不要将 M6-P3 尚未实现的能力写入功能提交。
+3. 按 M6-P3 规划把 RX 改为 DMA Circular，不在正常 HT/TC/IDLE 后反复 Stop/Restart；为 UART 字节流建立独立于 M4 `uint32_t` 元素 Ring Buffer 的 `uint8_t` Ring Buffer。
+4. 通过已知发送总字节数、序号/CRC 与 MCU 实际消费字节数验证 10 KB、50 KB 连续流，分别记录溢出、覆盖/序列错误和硬件 Error；发现失败时报告边界，而不是笼统写“完全无丢包”。

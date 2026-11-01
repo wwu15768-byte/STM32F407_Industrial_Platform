@@ -26,8 +26,8 @@
 | M2 | 启动并理解 FreeRTOS 最小系统与调度基础 | 完成 |
 | M3 | 建立线程安全、可裁剪的调试基础设施 | 完成 |
 | M4 | 掌握并实现 RTOS 通信、同步和数据缓冲基础 | 完成 |
-| M5 | 建立 ADC + Timer + DMA 实时数据采集子系统 | 当前（P0 已提交；P1～P5 基础功能与回归已验收，待本轮 Git 归档） |
-| M6 | 实现并验证 UART DMA + IDLE 不定长通信 | 待开始 |
+| M5 | 建立 ADC + Timer + DMA 实时数据采集子系统 | 完成（基础功能已验收，PR #6 合并 `30b0072`） |
+| M6 | 实现并验证 UART DMA + IDLE 不定长通信 | 当前（P1/P2 基线通过；P3 连续接收待实现） |
 | M7 | 实现并验证 RS485 半双工通信 | 待开始 |
 | M8 | 实现基础 Modbus RTU 通信 | 待开始 |
 | M9 | 建立独立于具体总线的统一数据模型 | 待开始 |
@@ -209,7 +209,7 @@
 - 最小 Queue、Notification、Semaphore 和 Ring Buffer 实验代码；可选构建的 `m4_spsc_test` 专项压力测试代码。
 - 并发机制选择说明、数据所有权说明和 M4 测试记录；SPSC 原子内存序、可见性和 Full 重试计数语义记录。
 
-## M5：ADC + Timer + DMA 数据采集子系统（当前）
+## M5：ADC + Timer + DMA 数据采集子系统（基础里程碑已完成）
 
 **当前进度校准（2026-10-29）**
 
@@ -267,7 +267,16 @@ Timer
 - ADC + Timer + DMA 采集模块与任务链路。
 - 参数说明、数据流图和板级测试记录。
 
-## M6：UART DMA + IDLE 不定长通信
+## M6：UART DMA + IDLE 不定长通信（当前）
+
+> 2026-11-01 进展：M6-P1 CubeMX USART2 RX DMA1 Stream5 Channel4 Normal / NVIC 配置已建立，LF/CRLF 工作区噪音已清理；M6-P2 `ReceiveToIdle_DMA` + CMSIS-RTOS2 按值 Queue + UARTTask 的 1～64 B 指定样本功能测试通过。错误计数误调用已修正（正常 ASCII 11 次 TotalError=0）。8 格队列压力 Drop=49，64 格 Drop=0，但连续流端到端无损未验证。正式 RX DMA TX、Ring Buffer、错误后恢复仍待分阶段实现；原下方目标为完整 M6 路线，不等于全数完成。
+
+**阶段推进**
+
+- M6-P1：配置与生成文件基线（完成；5 个预期文件 Diff，`git diff --check` 无输出）。
+- M6-P2：Normal DMA + IDLE/TC → ISR 非阻塞 Queue → UARTTask；边界与二进制测试、误错误计数修正、8/64 格背压对照（基础功能 PASS；持续流无损未完成）。
+- M6-P3：拟改用 Circular DMA + 独立 `uint8_t` Ring Buffer；验证 HT/TC/IDLE 去重、Wrap-around、任务消费与缓冲区满策略（未开始）。
+- M6-P4：连续数据流的序列/总量/溢出和错误后恢复测试，再依实际范围推进 UART TX DMA 与协议任务（待规划/实现）。
 
 **Goal**
 
