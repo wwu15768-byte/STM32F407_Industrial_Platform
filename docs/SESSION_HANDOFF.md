@@ -1,30 +1,21 @@
 > 当前会话快照；会话切换前整体更新。
-> 更新时间：2026-11-01（M6-P1/P2 USART2 DMA Normal + IDLE/TC 实测与队列压力对照完成，P3 待开始）。
-> 最新有终端证据的合并 Git 起点：`feature/m6-baseline` @ `30b0072`（M5 PR #6 Merge）；M6-P1 EOL 清理后仅 5 个生成配置文件未提交，后续功能/文档 Git 状态未收到新的 clean HEAD 或 Push 输出。
-> 下文 M0～M4 历史实验段落中的“当前结构”只代表该阶段的实测固件/设计，不代表目前 M6 默认固件中仍保留实验任务。最新状态以本段与文末为准。
+> 更新时间：2026-11-12，M6-P3 板级验收和代码推送完成。
+> 下文 M0～M4 段落保留对应阶段的历史实验条件。当前固件以本文首尾状态为准。
 
 ## 当前 Milestone
 
-M6：USART2 UART DMA + IDLE 不定长收包；M0～M5 基础里程碑已完成。M6-P1 CubeMX 配置和生成代码 EOL 清理完成，M6-P2 Normal DMA 64 B + CMSIS Queue + UARTTask 基本收包、二进制/边界与正常错误统计测试通过。M6-P3 Circular DMA + 独立字节 Ring Buffer 尚未实现。
-
-- M6-P1：USART2 115200/8N1，PD5 TX、PD6 RX，DMA1 Stream5 Channel4、Normal、Peripheral-to-Memory、Byte；启用 USART2 和 DMA1 Stream5 IRQ；生成文件清理后 5 个真实 Diff 文件、78 行新增/1 行删除，`git diff --check` 无输出。
-- M6-P2：`HAL_UARTEx_ReceiveToIdle_DMA` + `HAL_UARTEx_RxEventCallback`（IDLE=2、TC=0），每个有效区间按值送 CMSIS Queue，由 UARTTask 消费；1/4/6/31/32/63/64 B 测试已通过。
-- 修正：曾错误地在正常接收回调调用错误统计函数。移除误调用并关闭 FE/ORE 自检后，11 次 ASCII `01 02 03 04`（每次 11 B）均正确，`Count=11 Drop=0 StartFail=0`、全部 RX Error=0。
-- 压力对照：8 格 Queue `Count=747 Drop=49`、Heap=11704 B；64 格 Queue `Count=753 Drop=0`、Heap=7672 B；`StartFail=0`，UART 错误统计零。增加 56 项消耗 4032 B Free Heap；64 格只证明本次 Queue Put 不失败，未证明 UART 总字节不丢失。
+M6：USART2 DMA + IDLE 不定长接收。P3 使用 DMA1 Stream5 Channel4 Circular、256 B DMA 接收区和有效 1023 B 的独立软件字节环。HT/TC/IDLE 回调按 DMA 剩余传输数和旧游标搬运新增区间，UARTTask 分块消费并校验测试序列。环满时拒绝放不下的新字节并累计 `DropBytes`。
 
 ## 当前 Branch 与 Git 基线
 
-- 用户确认：M5 PR #6 已合并，`30b0072` 为 `main/origin/main` 及 M6 开发分支起点。当前分支 `feature/m6-baseline`。
-- M6-P1 最后一次 `git status -sb` 证据：五个修改文件 `Inc/stm32f4xx_it.h`、`.ioc`、`Src/dma.c`、`Src/stm32f4xx_it.c`、`Src/usart.c`，Diff 78+/1−；无 EOL 警告和空白错误。
-- 目前无新提供的 M6-P2 Commit/Push/工作区 clean 或 Debug Clean Build 终端记录；不要填入虚构的 M6 功能或文档提交号。
+- M5 PR #6 合并点 `30b0072`。当前 `feature/m6-baseline` 含 M6-P2 功能 `7d6b3dd`、文档 `bd6d2cf` 与 M6-P3 功能 `3136142`。
+- 2026-11-12 通过 `git ls-remote` 验证 `refs/heads/feature/m6-baseline` 与本地 HEAD 均为 `31361427e017e3c053dc1c087fa2763e96eb3cd2`。代码提交前关闭 `M6_OVERFLOW_TEST`，Debug 构建和暂存空白检查通过。
 
-## 2026-11-01 M6-P2 最新验证快照
+## 2026-11-12 M6-P3 验证快照
 
-- 基础功能：64 B TC 与 1～63 B 已测试样本 IDLE 接收。具体 1、4、6、31、32、63、64 B 通过，二进制 `00 55 AA FF` 及递增序列正确；31/63 B 为用户确认，无独立日志片段。
-- 正常错误统计：发送 ASCII `01 02 03 04` 共 11 次，均接收到 `30 31 20 30 32 20 30 33 20 30 34`，末次 Count 11、Drop 0、StartFail 0、Error Total/PE/NE/FE/ORE/DMA=0；不是 FE/ORE 真实硬件注入。
-- 两份压力原始 TXT：每份 13 条 `SEND ASCII`，每次发送文本 3599 个字符。8 格最后 `Count=747 Drop=49 StartFail=0`，Heap/MinHeap=11704 B，UARTFree 最低 344 B；64 格最后 `Count=753 Drop=0 StartFail=0`，Heap/MinHeap=7672 B，UARTFree 最低 336 B；均没有新增 UART Error。
-- `Count` 为任务已消费消息数，不是已接收的总字节数；初始窗口已经存在非零接收，不应从 747/753 和 13 次发送直接推断无损。`Drop=0` 仅意味着入队失败未观测到，Normal DMA 重启空窗仍是待测风险。
-- M6 目前不要求和 M5 ADC/DMA2 新回归耦合，原 M5 证据保留在历史测试记录。
+- 257 B 跨界两次累计 514 B。原始 10/50 KiB 长流完整消费，`MismatchBytes=0`。50 KiB 第 65 字节翻转用例 `MismatchBytes=1`。
+- 2048 B 溢出注入保留前 1023 B，拒绝 1025 B。排空后原序列校验通过，同次运行恢复 257 B 成功。具体快照见 `TEST-20261112-01`～`TEST-20261112-03`。
+- 历史 P2 Clean Build 和 1/4/63/64 B 短包复核通过。P2 8/64 格队列对照与计数限制保留在 `TEST-20261101-01`～`TEST-20261101-04`。
 
 ## 已完成并验证的内容
 
@@ -694,36 +685,23 @@ overflow_count
 
 ## 当前明确未实现
 
-- M6-P3 Circular DMA + UART 字节 Ring Buffer、HT/TC/IDLE 指针差分/重叠处理、Wrap-around 与持续输入无损验收。
-- 真实 FE/ORE/NE 等 UART 物理故障注入和错误回调后 DMA RX 的自动恢复；软件 FE/ORE 自检不等于真实错误注入。
-- 已知发送字节总量与 MCU 消费字节总量的完整对照，连续流中的序号断裂/重复和 Normal DMA Stop/Restart 漏字节量化。
-- UART RX 的正式协议解析 Task、USART2 TX DMA、RS485、Modbus、CAN、Bootloader/IAP 等后续里程碑。
-- M6-P2 最新代码 Commit/Push、最新干净工作区与最终 Debug Clean Build，尚未收到用户终端证据。
-- 原 M5 高精度 ADC 标定、严格逐样本 DMA 无损与极端负载验证属于历史技术边界，本轮 M6 不新增 ADC 回归目标。
-
-**已实现且不可再列为未完成：** M0～M5 阶段基础链路、M4 Task↔Task SPSC 历史专项、M5 PR #6 合并、M6-P1 UART DMA Normal 配置与 EOL 清理、M6-P2 已测试短包/边界接收、正常错误计数修正和 8/64 格队列对照实验。
+- 真实 UART FE/ORE/NE 或 DMA 错误注入，以及接收中止后的自动恢复。P3 已通过软件环溢出后的消费恢复。
+- 最坏中断延迟、DMA 数据覆盖时限和长时间高负载测试。
+- USART2 TX DMA、正式协议解析及后续里程碑。
 
 ## 已确认的重要约束
 
-- MCU 为 STM32F407VGT6，HAL + CMSIS-RTOS2；TIM6 为 HAL Timebase，SysTick 为 FreeRTOS Tick。当前 USART2 PD5 TX/PD6 RX，115200 8N1，RX DMA1 Stream5 Channel4；UART Logger 仍使用 Task 上下文同步 TX + Mutex。
-- ISR 回调不得调用阻塞 UART Logger；M6-P2 通过零等待 `osMessageQueuePut` 移交缓冲区快照。涉及 CMSIS RTOS ISR API 的 UART/DMA IRQ 优先级必须满足 FreeRTOS 阈值约束。
-- Normal DMA 接收完成后需重新启动，`StartFail=0` 不代表重启窗口无漏字节。不能用硬件 UART Error=0 证明软件数据完整性；Queue 深度 64 时 Drop=0 仍不代表端到端无损。
-- `M4_ENABLE_SPSC_TEST` 默认 OFF；M4 `uint32_t[8]` Task↔Task SPSC 测试不能直接套作 M6 UART 字节 Ring Buffer。
-- CubeMX 再生成后先核对真实 .ioc/DMA/USART/IRQ Diff 与 CRLF/LF 噪音；保留补丁或备份，不要不检查就全量暂存/重置。
-- M6 当前专注 USART2 通信，按用户决定不在本轮重新验证 M5 ADC/DMA2；不据此改变 M5 已完成的历史状态。
+- STM32F407VGT6，HAL + CMSIS-RTOS2。USART2 PD5/PD6、115200/8N1，DMA1 Stream5 Channel4。TIM6 为 HAL Timebase，SysTick 为 RTOS Tick。
+- USART2 和 DMA RX IRQ 的抢占优先级均为 5。软件环由回调发布原子 `head`，UARTTask 发布原子 `tail`。统计快照使用短任务临界区，日志在任务上下文输出。
+- `DropBytes` 记录软件环拒绝的字节量。DMA 整圈覆盖风险和物理 UART/DMA 错误需分别验证。M4 的 `uint32_t` 环保留为历史实验模块。
+- 当前 UARTTask 每轮最多消费 4 × 64 B，`osDelay(10U)`。代码含固定伪随机测试序列的内容比对，`M6_OVERFLOW_TEST` 仅控制暂停消费者，提交值为 `0U`。
 
 ## 当前最新验证情况
 
-- Git 起点：`feature/m6-baseline` @ `30b0072`（M5 PR #6 Merge），M6-P1 生成文件 Diff 5 文件/78+1−、`git diff --check` 无输出。
-- M6-P2：1、4、6、31、32、63、64 B 基础接收与二进制顺序 PASS；11 次 ASCII 11 B 正常接收 PASS，错误计数 Total=0。
-- 压力：8 格 Queue `Count=747 Drop=49`；64 格 Queue `Count=753 Drop=0`；其余 `StartFail=0`、错误分类 0；Free Heap 11704→7672 B。没有端到端 byte count / sequence 的零丢失证明。
-- 证据：`TEST-20261101-01`～`04`；根因与边界：`ERR-20261101-01`～`03`、`KG-015`/`KG-016`；阶段决策：`DEC-20261101-01`～`03`。
+- P3 代码已推送 `3136142`，只含 `.ioc`、`Src/usart.c` 和 `Src/freertos.c`。
+- 溢出恢复最终 `Observed=2305`、`Buffered=Consumed=CheckedBytes=1280`、`DropBytes=1025`、`Pending=MismatchBytes=StatsErrors=0`。
+- 内容校验与溢出恢复日志中 UARTFree 分别为 480 B 和 456 B。HeartFree 384 B，Heap/MinHeap 12368 B。
 
 ## 下一步最合理的一个任务
 
-**先完成 M6-P2 代码与测试文档归档，再开始 M6-P3 Circular DMA + 字节 Ring Buffer。**
-
-1. 审核 M6-P2 的真实源码、.ioc、CMake 与换行符：`git status -sb`、`git diff --stat`、`git diff --check`；执行 `cmake --build --preset Debug --clean-first` 并如实记录输出，必要时进行一次当前 M6 板级功能确认。
-2. 对照本 ZIP 的九份 docs，保留项目目录中更晚的实际改动，避免覆盖冲突；按功能与文档分开暂存、核查并提交/推送。未见新 Git 输出前不写提交号。
-3. 进入 M6-P3：DMA Normal 改 Circular，独立 `uint8_t` 字节 Ring Buffer；正确处理 DMA 位置差分与 HT/TC/IDLE 事件，建立已接收、入队/入环、消费、丢弃字节计数。
-4. 先以 10 KB/50 KB 已知序列验证总量、顺序与回绕，再施加压力评估溢出与异常恢复。缺少证据时只报告观察窗口，不宣称零丢字节。
+审阅并归档 M6-P3 文档。随后进入 M6-P4，先确定真实 UART/DMA 异常的注入条件和恢复验收标准，再验证故障后重新接收已知序列。

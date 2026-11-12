@@ -269,14 +269,14 @@ Timer
 
 ## M6：UART DMA + IDLE 不定长通信（当前）
 
-> 2026-11-01 进展：M6-P1 CubeMX USART2 RX DMA1 Stream5 Channel4 Normal / NVIC 配置已建立，LF/CRLF 工作区噪音已清理；M6-P2 `ReceiveToIdle_DMA` + CMSIS-RTOS2 按值 Queue + UARTTask 的 1～64 B 指定样本功能测试通过。错误计数误调用已修正（正常 ASCII 11 次 TotalError=0）。8 格队列压力 Drop=49，64 格 Drop=0，但连续流端到端无损未验证。正式 RX DMA TX、Ring Buffer、错误后恢复仍待分阶段实现；原下方目标为完整 M6 路线，不等于全数完成。
+> 2026-11-12 进展：M6-P3 Circular DMA 和独立字节环已完成板级验收，代码 `3136142` 已推送 `feature/m6-baseline`。USART2 RX 通过 257 B 跨界、10/50 KiB 逐字节校验、单字节错误检出和软件环溢出恢复。
 
 **阶段推进**
 
-- M6-P1：配置与生成文件基线（完成；5 个预期文件 Diff，`git diff --check` 无输出）。
-- M6-P2：Normal DMA + IDLE/TC → ISR 非阻塞 Queue → UARTTask；边界与二进制测试、误错误计数修正、8/64 格背压对照（基础功能 PASS；持续流无损未完成）。
-- M6-P3：拟改用 Circular DMA + 独立 `uint8_t` Ring Buffer；验证 HT/TC/IDLE 去重、Wrap-around、任务消费与缓冲区满策略（未开始）。
-- M6-P4：连续数据流的序列/总量/溢出和错误后恢复测试，再依实际范围推进 UART TX DMA 与协议任务（待规划/实现）。
+- M6-P1：配置与生成文件基线已完成。
+- M6-P2：Normal DMA + IDLE/TC + CMSIS 队列的短包、边界和背压对照已完成，代码 `7d6b3dd`、文档 `bd6d2cf`。
+- M6-P3：Circular DMA 256 B + 独立字节 Ring Buffer（有效 1023 B）已完成。长流、软件环满丢弃计数、保留旧字节与恢复接收见 `TEST-20261112-01`～`TEST-20261112-03`。
+- M6-P4：待验证真实 UART/DMA 错误注入、异常后恢复及接收时序，再按实际范围推进 UART TX DMA 与协议任务。
 
 **Goal**
 

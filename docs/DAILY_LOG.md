@@ -2043,3 +2043,54 @@ MinHeap=4568 B
 ## 明天下一步
 
 先保存并审核 M6-P2 正常接收基线（检查 Debug 构建、Git Diff/状态与文档），再按 `ROADMAP.md` 分阶段推进 M6-P3 Circular DMA + 独立字节 Ring Buffer；采用发送端确定的字节总数/递增序列及接收端总量、连续性、Overflow 计数进行压力验收。
+
+# 2026-11-12
+
+## 今日计划
+
+- 完成 M6-P3 Circular DMA 长流逐字节校验、软件环溢出与恢复接收验收。
+- 清理 CubeMX 再生成差异，关闭溢出测试暂停，提交并归档 M6-P3。
+
+## 实际完成
+
+- 回顾前置基线：M6-P2 功能 `7d6b3dd`、测试文档 `bd6d2cf` 已提交。Debug Clean Build 通过，RAM `21728 B`、FLASH `41168 B`、CCMRAM `0 B`。用户确认 1/4/63/64 B 板级复核通过，Drop、StartFail 和 UART 错误统计均为 0。
+- USART2 保持 115200/8N1，DMA1 Stream5 Channel4 改为 Circular。RX DMA 区 256 B，`HAL_UARTEx_RxEventCallback()` 通过 DMA 剩余传输数计算新增区间，处理 HT/TC/IDLE 和游标回绕。正常回调持续接收，不反复重启 DMA。
+- 以独立 `uint8_t[1024]` 软件环替换 P2 消息队列，预留一格，有效容量 1023 B。回调发布原子 `head`，UARTTask 发布原子 `tail`。环满时保留旧字节，按实际拒绝量累计 `DropBytes`。
+- UARTTask 每轮最多读 4 个 64 B 块，当前 `osDelay(10U)`。任务在短临界区内抓取计数和环索引，退出后打印。用 xorshift32 固定种子 `0x13579BDF` 校验长流，跨块保留期望状态。
+- 归档前核对 54 个改动文件：46 个纯换行、5 个 ADC 驱动文件仅新增末尾空行。清理后仅保留 `.ioc`、`Src/usart.c`、`Src/freertos.c`。用户确认 `M6_OVERFLOW_TEST=0U`、Debug 构建通过、`git diff --cached --check` 无输出。
+
+## 验收情况
+
+- 257 B 跨 DMA 边界两次通过，板端累计 `0 → 257 → 514 B`，丢弃和记账错误均为 0。
+- 10 KiB 与 50 KiB 原始测试数据单次发送，`Observed=Buffered=Consumed=CheckedBytes` 分别为 10240、51200，`Drop=Pending=StatsErrors=MismatchBytes=0`。50 KiB 副本仅修改第 65 字节 `39 → 38`，板端完整消费 51200 B，`MismatchBytes=1`。
+- 暂停 UARTTask 消费后发送 2048 B，满环快照 `Obs=2048 Buf=1023 Drop=1025 Con=0 Pending=1023`。排空后校验 1023 B 且 `MismatchBytes=0`，确认保留的是最先到达的 1023 B。
+- 保持同次运行，排空后再发送恢复向量 257 B，最终 `Observed=2305`、`Buffered=Consumed=CheckedBytes=1280`、`Drop=1025`、`Pending=MismatchBytes=StatsErrors=0`，恢复段新增丢弃 0 B。
+- 内容校验日志中 UARTFree 为 480 B，溢出恢复日志中为 456 B，HeartFree 为 384 B，Heap/MinHeap 均为 12368 B。详细记录见 `TEST-20261112-01`～`TEST-20261112-03`。
+
+## 未完成
+
+- 真实 UART FE/ORE 或 DMA 硬件错误注入及接收自动恢复。已验收的恢复场景是软件环溢出后恢复消费。
+- DMA 事件至数据复制完成的最坏时延和长时间高负载范围尚待测量。
+
+## 今日 Bug
+
+- 本阶段曾将读取输出参数误声明为 `const uint8_t *`，已修正。`M6_RingWrite()` 多报一个字节、消费计数来源不一致、pending 公式和日志 Tick 口径错误均已修正，后续板级统计与内容校验通过。
+- 早期长流试验把带空格 HEX 文本作为 ASCII 发送，10240 组字节文本实际为 30719 个字符。改用 HEX 模式和原始二进制文件后按发送字节数对账通过。
+- CubeMX 行尾与末尾空行问题见 `ERR-20261112-01`。
+
+## 今日学习
+
+- DMA 游标和软件环索引按各自容量回绕。环满后仍推进 DMA 旧游标，避免重复处理已经拒绝的数据。
+- 记账等式、逐字节比较和硬件错误统计各有独立含义。通过暂停消费者并比对前缀，可以同时验证溢出字节数和旧数据顺序。
+
+## 尚未理解
+
+- 硬件错误导致 DMA 接收中止后的恢复顺序、恢复失败计数和实测恢复时间。
+
+## Git
+
+- 当前分支 `feature/m6-baseline`，代码提交 `3136142`（`feat: add USART2 circular DMA RX and byte ring buffer`）。2026-11-12 通过 `git ls-remote` 确认远程分支与本地 HEAD 同为 `31361427e017e3c053dc1c087fa2763e96eb3cd2`，更新文档前工作区干净。
+
+## 明天下一步
+
+归档本阶段文档，按 M6-P4 设计并验证 UART/DMA 硬件异常后的接收恢复，补充回调时延证据。
