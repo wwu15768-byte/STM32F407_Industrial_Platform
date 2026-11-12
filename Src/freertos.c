@@ -20,6 +20,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "FreeRTOS.h"
 #include "cmsis_os2.h"
+#include "portmacro.h"
 #include "task.h"
 #include "main.h"
 #include "cmsis_os.h"
@@ -50,26 +51,26 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define ADC_FLAG_HALF (1UL << 0)
-#define ADC_FLAG_FULL (1UL << 1)
+#define ADC_FLAG_HALF       (1UL << 0)
+#define ADC_FLAG_FULL       (1UL << 1)
 
-#define M6_RX_DMA_SIZE      64U
+#define ADC_BUFFER_SIZE     20U
+
+#define M6_RX_DMA_SIZE      256U
+#define M6_RING_BUFF_SIZE   1024U
 #define M6_RX_QUEUE_DEPTH   64U
+
+#define M6_OVERFLOW_TEST    0U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-typedef struct M6_Rx_Packet
-{
-  uint16_t size;
-  uint32_t event;
-  uint8_t data[M6_RX_DMA_SIZE];
-} M6_RxPacket_t;
+
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-#define ADC_BUFFER_SIZE 20U
+
 
 static uint16_t adc_buffer[ADC_BUFFER_SIZE];
 volatile uint32_t voltage = 0;
@@ -89,10 +90,29 @@ static volatile uint32_t m6_start_fail = 0U;
 static volatile uint32_t m6_last_size = 0U;
 static volatile uint32_t m6_last_event = 0U;
 static volatile uint32_t last_logged_count = 0U;
-static volatile uint8_t m6_last_data[M6_RX_DMA_SIZE];
-static osMessageQueueId_t m6_rx_queue = NULL;
 static uint8_t m6_dma_rx_buf[M6_RX_DMA_SIZE];
 
+static volatile uint8_t m6_data_ring_buff[M6_RING_BUFF_SIZE];
+
+static volatile uint32_t m6_obersevd_byte = 0U;
+static volatile uint32_t m6_writed_byte = 0U;
+static volatile uint32_t m6_drop_byte = 0U;
+static volatile uint32_t m6_consumed_byte = 0U;
+static volatile uint32_t m6_pending_byte = 0U;
+
+static volatile uint32_t m6_last_obersevd_byte = 0U;
+static volatile uint32_t m6_last_writed_byte = 0U;
+static volatile uint32_t m6_last_drop_byte = 0U;
+static volatile uint32_t m6_last_consumed_byte = 0U;
+static volatile uint32_t m6_last_pending_byte = 0U;
+
+static volatile uint32_t m6_mismatch_byte = 0U;
+static volatile uint32_t m6_stats_error_count = 0U;
+
+static _Atomic uint32_t m6_ring_head = 0U;
+static _Atomic uint32_t m6_ring_tail = 0U;
+static volatile uint32_t m6_dma_old_pos = 0U;
+static volatile uint32_t m6_ring_overflow_count = 0U;
 
 static volatile uint32_t m6_uart_error_count = 0U;
 static volatile uint32_t m6_uart_pe_count = 0U;
@@ -137,15 +157,103 @@ static HAL_StatusTypeDef M6_UART_RxStart(void)
     m6_dma_rx_buf,
     M6_RX_DMA_SIZE);
 
-  if(status == HAL_OK)
-  {
-    /* close Half Transfer interrupt in proccess 1 */
-    __HAL_DMA_DISABLE_IT(huart2.hdmarx, DMA_IT_HT);
-  }
-
   return status;
 }
 
+/* 仅由串行化的 RX 回调调用，返回实际缓存的字节数。 */
+static uint32_t M6_RingWrite(const uint8_t *data, uint32_t length)
+{
+    uint32_t head =
+        atomic_load_explicit(&m6_ring_head, memory_order_relaxed);
+    const uint32_t tail =
+        atomic_load_explicit(&m6_ring_tail, memory_order_acquire);
+    uint32_t written = 0U;
+
+    if (data == NULL)
+    {
+        return 0U;
+    }
+
+    for (; written < length; ++written)
+    {
+        const uint32_t next = (head + 1U) % M6_RING_BUFF_SIZE;
+
+        if (next == tail)
+        {
+            break;  /* 环满，保留尚未消费的旧数据。 */
+        }
+
+        m6_data_ring_buff[head] = data[written];
+        head = next;
+    }
+
+    /* 数据写完后，再一次性发布新的写入位置。 */
+    atomic_store_explicit(&m6_ring_head, head, memory_order_release);
+    return written;
+}
+
+static uint32_t M6_RingRead(uint8_t *data, uint32_t capacity)
+{
+  if(data == NULL)
+  {
+    return 0U;
+  }
+  uint32_t tail = atomic_load_explicit(&m6_ring_tail, memory_order_relaxed);
+  const uint32_t head = atomic_load_explicit(&m6_ring_head, memory_order_acquire);
+  uint32_t count = 0U;
+
+  for(;(count < capacity) && (tail != head); ++count)
+  {
+    data[count] = m6_data_ring_buff[tail];
+    tail = (tail + 1) % M6_RING_BUFF_SIZE;
+  }
+  atomic_store_explicit(&m6_ring_tail, tail, memory_order_release);
+
+  return count;
+}
+
+void M6_GetRxStats(void)
+{
+
+  taskENTER_CRITICAL();
+
+  const uint32_t head =
+      atomic_load_explicit(&m6_ring_head, memory_order_relaxed);
+  const uint32_t tail =
+      atomic_load_explicit(&m6_ring_tail, memory_order_relaxed);
+
+  m6_last_consumed_byte = m6_consumed_byte;
+  m6_last_drop_byte = m6_drop_byte;
+  m6_last_obersevd_byte = m6_obersevd_byte;
+  m6_last_writed_byte = m6_writed_byte;
+  m6_last_pending_byte = (head - tail + M6_RING_BUFF_SIZE) % M6_RING_BUFF_SIZE;
+
+  taskEXIT_CRITICAL();
+
+  if((m6_last_obersevd_byte != m6_last_drop_byte + m6_last_writed_byte) ||
+     (m6_last_writed_byte != m6_last_consumed_byte + m6_last_pending_byte))
+  {
+      m6_stats_error_count++;
+  }
+}
+
+static uint8_t M6_TestNextByte(uint32_t *state)
+{
+  if(state == NULL)
+  {
+    return 0;
+  }
+
+  uint32_t x = *state;
+
+  x ^= x << 13U;
+  x ^= x >> 17U;
+  x ^= x << 5U;
+
+  *state = x;
+
+  return (uint8_t)(x & 0xFFU);
+}
 
 static void M6_UART_RecordError(uint32_t error)
 {
@@ -193,7 +301,10 @@ void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
   */
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
-
+  if(M6_UART_RxStart() != HAL_OK)
+  {
+    m6_start_fail++;
+  }
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -214,20 +325,6 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_QUEUES */
 
-  m6_rx_queue = osMessageQueueNew(M6_RX_QUEUE_DEPTH,
-                                  sizeof(M6_RxPacket_t),
-                                  NULL);
-  if(m6_rx_queue != NULL)
-  {
-    if(M6_UART_RxStart() != HAL_OK)
-    {
-      m6_start_fail++;
-    }
-  }
-  else
-  {
-    m6_start_fail++;
-  }
   /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
 
@@ -288,7 +385,10 @@ void StartUARTTask(void *argument)
 {
   /* USER CODE BEGIN StartUARTTask */
   static uint32_t stack_sample_count = 0U;
-
+  static uint8_t m6_rx_chunk[64];
+  uint32_t last_log_tick = osKernelGetTickCount();
+  uint32_t expected_state = 0x13579BDFU;
+  uint32_t checked_bytes = 0U;
 /* M6 stress test code */
 #if 0
   M6_UART_RecordError(
@@ -297,35 +397,92 @@ void StartUARTTask(void *argument)
   );
 #endif
 
+#if M6_OVERFLOW_TEST
+
+  while(atomic_load_explicit(&m6_ring_tail, memory_order_relaxed)
+        == atomic_load_explicit(&m6_ring_head, memory_order_acquire))
+  {
+    if(osDelay(1U) != osOK)
+    {
+      Error_Handler();
+    }
+  }
+
+  if(osDelay(2U * osKernelGetTickFreq()) != osOK)
+  {
+    Error_Handler();
+  }
+
+  M6_GetRxStats();
+
+  LOG_INFO("OVF", "Obs=%lu Buf=%lu Drop=%lu Con=%lu Pending=%lu",
+             (unsigned long)m6_last_obersevd_byte,
+             (unsigned long)m6_last_writed_byte,
+             (unsigned long)m6_last_drop_byte,
+             (unsigned long)m6_last_consumed_byte,
+             (unsigned long)m6_last_pending_byte);
+
+#endif
+
   /* Infinite loop */
   for(;;)
   {
-    if(m6_rx_queue != NULL)
+    uint32_t now = osKernelGetTickCount();
+    for(uint32_t block = 0U; block < 4U; block++)
     {
-      M6_RxPacket_t packet;
+      const uint32_t count = M6_RingRead(m6_rx_chunk, sizeof(m6_rx_chunk));
 
-      while(osMessageQueueGet(m6_rx_queue,
-                              &packet,
-                              NULL,
-                              0U) == osOK)
+      if(count == 0U)
       {
-        for(uint16_t i = 0; i < packet.size; i++)
-        {
-          m6_last_data[i] = packet.data[i];
+        break;
+      }
 
+      for(uint32_t i = 0U; i < count; ++i)
+      {
+        const uint8_t expected = M6_TestNextByte(&expected_state);
+
+        if(m6_rx_chunk[i] != expected)
+        {
+          m6_mismatch_byte++;
         }
 
-        m6_last_size = packet.size;
-        m6_last_event = packet.event;
-        m6_rx_count++;
       }
+      checked_bytes += count;
+
+      m6_consumed_byte += count;
+
+    }
+
+    if((uint32_t)(now - last_log_tick) >= osKernelGetTickFreq())
+    {
+      M6_GetRxStats();
+      last_log_tick = now;
+      LOG_INFO( "DAR",
+                "ObseredByte = %lu B WritedByte = %lu B DropByte = %lu",
+                 (unsigned long)m6_last_obersevd_byte,
+                 (unsigned long)m6_last_writed_byte,
+                 (unsigned long)m6_last_drop_byte);
+
+      LOG_INFO( "DAR",
+                "ConsumedByte = %lu B PendingByte = %lu B",
+                 (unsigned long)m6_last_consumed_byte,
+                 (unsigned long)m6_last_pending_byte);
+
+      LOG_INFO( "DAR",
+                "StatsErrors = %lu",
+                 (unsigned long)m6_stats_error_count);
+
+      LOG_INFO("DAR", "CheckedBytes=%lu MismatchBytes=%lu",
+                (unsigned long)checked_bytes,
+                (unsigned long)m6_mismatch_byte);
+
     }
     /*
     检测剩余栈与运行状态
     */
     stack_sample_count ++;
 
-    if(stack_sample_count % 10 == 0U)
+    if(stack_sample_count % 250 == 0U)
     {
       uint32_t heartbeat_stack_free;
       uint32_t uart_stack_free;
@@ -347,49 +504,6 @@ void StartUARTTask(void *argument)
          "Heap=%lu B MinHeap=%lu B",
          (unsigned long)heap_free,
          (unsigned long)heap_min_free);
-
-      if (m6_rx_count != last_logged_count)
-      {
-          last_logged_count = m6_rx_count;
-
-          LOG_INFO("RXM",
-                  "Size=%lu Event=%lu Count=%lu Drop=%lu StartFail=%lu",
-                  (unsigned long)m6_last_size,
-                  (unsigned long)m6_last_event,
-                  (unsigned long)m6_rx_count,
-                  (unsigned long)m6_rx_drop,
-                  (unsigned long)m6_start_fail);
-
-          LOG_INFO("RXE",
-             "Total=%lu PE=%lu NE=%lu FE=%lu ORE=%lu DMA=%lu Last=0x%08lX",
-             (unsigned long)m6_uart_error_count,
-             (unsigned long)m6_uart_pe_count,
-             (unsigned long)m6_uart_ne_count,
-             (unsigned long)m6_uart_fe_count,
-             (unsigned long)m6_uart_ore_count,
-             (unsigned long)m6_uart_dma_error_count,
-             (unsigned long)m6_uart_last_error);
-
-          for(uint32_t i = 0U; i < m6_last_size; i+=8U)
-          {
-            uint32_t n = m6_last_size - i;
-            char line[25] = {0};
-            if(n > 8U)
-            {
-              n = 8U;
-            }
-
-            for(uint32_t j = 0U; j < n; j++)
-            {
-              snprintf(&line[j * 3U],
-                   sizeof(line) - j * 3U,
-                   "%02x ",
-                   m6_last_data[i + j]);
-            }
-            LOG_INFO("RXM", "%s", line);
-          }
-      }
-
 
 #if defined(M4_ENABLE_SPSC_TEST)
       LOG_INFO(
@@ -530,38 +644,37 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
     return;
   }
 
-  uint32_t event = HAL_UARTEx_GetRxEventType(huart);
-
-  if(event == HAL_UART_RXEVENT_HT)
-  {
-    return;
-  }
-
   if((Size > 0U) && (Size <= M6_RX_DMA_SIZE))
   {
-    M6_RxPacket_t packet;
 
-    packet.size = Size;
-    packet.event = event;
+    uint32_t remaining = __HAL_DMA_GET_COUNTER(huart->hdmarx); //获取缓存区剩余空闲位数
+    uint32_t pos = (M6_RX_DMA_SIZE - remaining) % M6_RX_DMA_SIZE;
 
-    memcpy(packet.data, m6_dma_rx_buf, Size);
-
-    if((m6_rx_queue == NULL) ||
-       (osMessageQueuePut(m6_rx_queue,
-                         &packet,
-                         0U,
-                         0U) != osOK))
+    if(pos > m6_dma_old_pos)
     {
-      m6_rx_drop++;
+      uint32_t written = M6_RingWrite(&m6_dma_rx_buf[m6_dma_old_pos], pos - m6_dma_old_pos);
+      m6_drop_byte += pos - m6_dma_old_pos - written;
+      m6_writed_byte += written;
+      m6_obersevd_byte += pos - m6_dma_old_pos;
+      m6_dma_old_pos = pos;
     }
-
-    /* reopen acception after normal mode finished */
-    if(M6_UART_RxStart() != HAL_OK)
+    if(pos < m6_dma_old_pos)
     {
-      m6_start_fail++;
-    }
+      uint32_t written = M6_RingWrite(&m6_dma_rx_buf[m6_dma_old_pos], M6_RX_DMA_SIZE - m6_dma_old_pos);
+      m6_drop_byte += M6_RX_DMA_SIZE - m6_dma_old_pos - written;
+      m6_writed_byte += written;
+      m6_obersevd_byte += M6_RX_DMA_SIZE - m6_dma_old_pos;
 
+      written = M6_RingWrite(m6_dma_rx_buf,  pos);
+      m6_drop_byte += pos - written;
+      m6_writed_byte += written;
+      m6_obersevd_byte += pos;
+
+      m6_dma_old_pos = pos;
+    }
   }
+
+  return;
 }
 
 
