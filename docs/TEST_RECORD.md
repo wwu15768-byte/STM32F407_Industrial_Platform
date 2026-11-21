@@ -2100,3 +2100,175 @@ Heap=3432 B        MinHeap=3432 B
 - 已知板级状态：恢复常规采集的串口窗口 `Error=0`、`Late=0`，Half/Full 已处理次数与回调次数一致、Heap/MinHeap 均为 `12368 B`。用户未附长时间运行全过程的逐时日志，也未提供准确持续分钟数或全部六次复位逐次原始串口记录。
 - 结论：**PASS（用户报告的既定长时间运行及六次复位回归）**。
 - 边界：不得将该记录写为“精确 30 分钟测试”“全天无丢样”或工业级安全/可靠性认证；最坏场景的逐样本完整性仍需更严格证据。
+
+## TEST-20261101-01：M6-P1 CubeMX RX DMA + IDLE 配置与 Git EOL 差异收敛
+
+- 目标：在 `feature/m6-baseline` 上添加 USART2 RX DMA/IRQ，保证 M6 有效修改可审计，不混入 CubeMX 行尾噪音。
+- 起点：用户已确认 `30b0072` 为 M5 PR #6 Merge HEAD，分支 `feature/m6-baseline` 初始与 `main`/对应远程引用同步且工作区 clean。
+- 关键配置：USART2 PD5/TX、PD6/RX，115200/8N1；RX DMA1 Stream5 Channel4、Peripheral-to-Memory、Normal、Byte 对齐、Memory Increment；开启 USART2 与 DMA1 Stream5 IRQ。HAL Timebase/FreeRTOS 及既有资源不作为本阶段修改目标。
+- 方法：CubeMX 生成后比较 `git diff --stat`、`git diff --ignore-space-at-eol --stat`、`git diff --check`、`git status -sb`；确认 HAL/FreeRTOS 等非目标变更属于 EOL/生成噪音并按备份/审核方式清理。
+- 实际结果：最终仅 5 个预期修改文件：`Inc/stm32f4xx_it.h`、`STM32F407_Industrial_Platform.ioc`、`Src/dma.c`、`Src/stm32f4xx_it.c`、`Src/usart.c`；`5 files changed, 78 insertions(+), 1 deletion(-)`；`git diff --check` 无输出。
+- 结论：**PASS（M6-P1 生成文件 Diff 收敛及基础配置证据）**。
+- 边界：本条不是 M6-P2 完整功能 Git 提交/推送确认；没有本轮最终 Debug Clean Build 的直接命令输出，不标记其独立通过。
+
+## TEST-20261101-02：M6-P2 Normal DMA + IDLE/TC 不定长接收与边界长度
+
+- 目标：验证 USART2 RX DMA Normal + IDLE 完成事件、64 B TC 边界和 ISR → Queue → UARTTask 数据交接。
+- 环境：STM32F407VGT6、USART2 115200/8N1、USB-TTL 3.3 V、DMA1 Stream5 Channel4 Normal、64 B RX Buffer；FreeRTOS CMSIS-RTOS2 消息队列按值传递。
+- 方法：单独发送 HEX 数据并比对长度、事件类型及字节顺序；任务记录 `m6_last_size`、`m6_last_event`、`m6_last_data` 与接收次数。
+- 实际结果：1 B (`01`)、4 B (`00 55 AA FF`)、6 B (`01 02 03 04 05 06`)、32 B (`00..1F`) 的短包/二进制数据显示完整，Event=2（IDLE）；64 B (`00..3F`) 内容顺序完整，Event=0（TC）。用户另外明确报告 31 B 和 63 B 测试通过，未提供独立原始日志片段。
+- 基础观察：正常间隔收发阶段 `Drop=0`、`StartFail=0`；尚无严格逐字节发送/消费总量测量。
+- 结论：**PASS（已测试长度与不定长 DMA RX 功能基线）**。
+- 边界：本项不证明无间隔连续流的端到端零丢字节；Normal DMA 在 IDLE/TC 后需要重新启动，不等于 Circular DMA。
+
+## TEST-20261101-03：M6-P2 错误统计修正及 11 次正常 ASCII 通信负向对照
+
+- 目标：证明正常 RxEvent 不再误触发错误记录，排除软件 FE/ORE 自检对真实错误计数的污染。
+- 修正前缺陷：错误记录函数误放进普通 RxEvent 回调，导致 `[RXE] Total` 与正常消息次数共同增长，`Last=0x00000000`。
+- 修正：用户确认已将记录函数调用从普通接收路径移除；关闭模拟 FE/ORE 自检，烧录/重新启动进行正常收发。
+- 方法：USART2 115200/8N1，串口助手 ASCII 模式发送文本 `01 02 03 04`（含 3 个空格，共 11 B）11 次；逐次检查接收内容和错误计数。
+- 典型记录：
+
+```text
+[I][RXM] Size=11 Event=2 Count=11 Drop=0 StartFail=0
+[I][RXE] Total=0 PE=0 NE=0 FE=0 ORE=0 DMA=0 Last=0x00000000
+[I][RXM] 30 31 20 30 32 20 30 33
+[I][RXM] 20 30 34
+```
+
+- 实际结果：11 次接收均按顺序完整显示 ASCII HEX 数据，`Count` 从 1 累加到 11，始终 `Drop=0 StartFail=0 Total=0`；未报告新增 FE/ORE/NE/PE/DMA 硬件错误。
+- 结论：**PASS（正常收发与错误计数语义修正的负向对照）**。
+- 边界：此测试只证明正常条件下未发生误计数，不是 FE/ORE 真实故障注入测试或 UART 错误后自动恢复验证。
+
+## TEST-20261101-04：M6-P2 8 格与 64 格 Queue 连续 ASCII 压力对照
+
+- 目标：用相同长文本发送模式量化消息队列入队失败与 RAM 开销，并确认此类软件丢弃与硬件 UART 错误统计应分别解读。
+- 环境：USART2 115200/8N1、DMA1 Stream5 Normal、64 B Buffer、UARTTask 周期性日志；8 格与 64 格两组分别运行。PC 串口工具使用 ASCII 发送由 `01 02 ... 10` 重复构成的长字符串。
+- 负载：两份原始日志各包含 13 次 `SEND ASCII`，每条记录正文 3599 字符，按日志文本统计总计 46787 字符/组。仅说明发送工具显示的有效文本规模，不等同于已证明 MCU 接收到全部字节；两组起始 `Count` 已非零，不可直接使用末次计数反推出准确漏字节数。
+
+| 项目 | Queue 深度 8 | Queue 深度 64 |
+| --- | ---: | ---: |
+| 最后可见已处理 `Count` | 747 | 753 |
+| 最后可见入队失败 `Drop` | 49 | 0 |
+| `StartFail` | 0 | 0 |
+| `[RXE] Total`/PE/NE/FE/ORE/DMA | 全部 0 | 全部 0 |
+| Heap / MinHeap | 11704 / 11704 B | 7672 / 7672 B |
+| UARTFree 最低可见值 | 344 B | 336 B |
+
+- 对比：增加 56 个队列元素，Free Heap 减少 `11704−7672=4032 B`，即 `4032/56=72 B`/元素，符合一个携带 64 B 内容与元数据的队列项及其分配开销的预期量级。
+- 主要发现：8 格组已确认软件入队失败；64 格组在同类可见负载中没有检测到 Queue Put 失败，表明扩容能缓解此阶段瞬时背压。两组 `StartFail=0` 和硬件错误计数全零，不等于 UART 连续流无丢字节。
+- 结论：**PASS（背压/扩容因果对照与资源测量）**；**FAIL/未达标（若以 8 格队列的零丢弃或现阶段连续流端到端无损为目标）**。64 格只可写作本轮 Queue Drop=0，不能写成绝对零丢字节。
+- 后续：M6-P3 引入 Circular DMA + 独立 `uint8_t` Ring Buffer；记录 DMA 回调报告字节数、缓存写入、消费和拒绝字节数；用已知总长度与序号/CRC 的原始二进制序列验证端到端完整性。
+
+## TEST-20261112-01：M6-P3 Circular DMA 跨界和长流字节总量
+
+- 归档日期：2026-11-12。计数验证依据 2026-11-11 的发送和板端日志。
+- 目标：验证 256 B DMA 接收区跨界与连续输入下的发送、接收、缓存和消费总量。
+- 环境：STM32F407VGT6，USART2 115200/8N1，DMA1 Stream5 Channel4 Circular，软件环 1024 格、有效 1023 B。
+- 方法：手动分别发送两次 257 B。10 KiB 和 50 KiB 分别从零计数开始，以 HEX 模式或 PowerShell 串口脚本单次发送，停发后等待 `Pending=0`。
+- 实际结果：257 B 两次累计 `0 → 257 → 514 B`。10 KiB 的发送记录解码为 10240 B，与测试文件一致。50 KiB 脚本报告发送 51200 B。两组最终 `Observed=Buffered=Consumed` 分别为 10240 和 51200，`Drop=Pending=StatsErrors=0`。
+- 对照：早期 `SEND ASCII` 日志的 30719 B 对应带空格的 HEX 文本字符数。本条验收使用后续的 HEX/原始字节发送证据。
+- 结论：**PASS（257 B 跨界与 10/50 KiB 单次长流计数）**。内容与顺序见 `TEST-20261112-02`。
+
+## TEST-20261112-02：M6-P3 长流逐字节内容、顺序与单字节错误检出
+
+- 目标：验证 UARTTask 按序消费测试数据，并检出指定位置的数据改变。
+- 方法：使用种子 `0x13579BDF` 的 xorshift32 序列。每轮复位后发送一个文件，校验状态跨读取块持续推进。负向用例在 51200 B 副本中将第 65 字节由 `39` 改为 `38`。
+
+| 用例 | Observed / Buffered / Consumed / CheckedBytes | MismatchBytes | Drop / Pending / StatsErrors |
+| --- | ---: | ---: | ---: |
+| `m6_stream_10240.bin` | 10240 B | 0 | 0 / 0 / 0 |
+| `m6_stream_51200.bin` | 51200 B | 0 | 0 / 0 / 0 |
+| `m6_stream_51200_flip_byte65.bin` | 51200 B | 1 | 0 / 0 / 0 |
+
+- 资源：可见快照 HeartFree 384 B、UARTFree 480 B、Heap/MinHeap 12368 B。
+- 结论：**PASS（两种原始长度的内容与顺序、单字节错误检出）**。
+- 范围：以上为已发送文件及当次板级条件的结果。实际线路间隔、最坏回调时延与长期稳定性需单独测量。
+
+## TEST-20261112-03：M6-P3 字节环溢出、旧数据保留及继续接收
+
+- 目标：验证环满拒绝新字节、丢弃量准确、已缓存数据保持顺序，以及恢复消费后的继续接收。
+- 方法：测试固件在第一次读环前等待首次接收，然后暂停消费约 2 s。发送 `m6_overflow_2048.bin`（原始序列前 2048 B），在消费前抓取 `[OVF]`，恢复后等待排空。保持同一次运行，发送 `m6_recovery_257.bin`（原始序列第 1024～1280 字节），沿用期望序列状态。
+
+| 时点 | Observed | Buffered | Consumed / Checked | DropBytes | Pending | MismatchBytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 满环，消费前 | 2048 | 1023 | 0 | 1025 | 1023 | — |
+| 恢复消费后的中间快照 | 2048 | 1023 | 256 | 1025 | 767 | 0 |
+| 首轮排空 | 2048 | 1023 | 1023 | 1025 | 0 | 0 |
+| 恢复发送 257 B 后排空 | 2305 | 1280 | 1280 | 1025 | 0 | 0 |
+
+- 实际结果：`2048 − 1023 = 1025 B` 与丢弃量一致。前 1023 B 比较全部通过。恢复段缓存、消费和校验各增加 257 B，新增丢弃 0 B，全部 `[DAR]` 快照 `StatsErrors=0`。
+- 资源：恢复测试中 HeartFree 384 B、UARTFree 456 B、Heap/MinHeap 12368 B。
+- 结论：**PASS（软件环满策略、丢弃记账与同次运行恢复接收）**。正式提交 `3136142` 的 `M6_OVERFLOW_TEST=0U`，用户确认关闭暂停后 Debug 构建通过。UART/DMA 硬件错误后的自动恢复属于后续验收。
+
+
+## TEST-20261121-01：M6-P4 T08 恢复重试成功与耗尽的软件故障分支
+
+- 记录日期：2026-11-21；原始日志采集日期未单独提供。
+- 目标：区分恢复重试中“先失败后成功”和“全部失败耗尽”的状态机分支，不以重试计数代替真实数据校验。
+- 环境：M6 USART2 RX DMA 错误恢复测试固件；T08-A/T08-B 为软件受控故障模拟。
+- 方法：分别控制恢复尝试结果，检查 `State/Err/LastErr/Retry/StartOK/AttemptFail/Exhausted` 和诊断计数。
+
+| 用例 | State | Retry | StartOK | AttemptFail | Exhausted | 其他证据 |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| T08-A 两次失败后成功 | 0 | 3 | 1 | 2 | 0 | `Err=1 LastErr=0x00000004 Gap=1 PreStart=1` |
+| T08-B 三次失败耗尽 | 4 | 3 | 0 | 3 | 1 | `Err=1 LastErr=0x00000004 Gap=1 PreStart=0` |
+
+- 结果：T08-A 最终返回运行态；T08-B 停在失败态，没有把耗尽当作成功。两轮诊断 `AbortWait=BusyWait=AbortRx=0`。
+- 结论：**PASS（恢复控制状态机的两条软件模拟分支）**。
+- 边界：该项不是硬件 FE/ORE/DMA 注入，也未单独验证恢复后的字节完整性。
+
+## TEST-20261121-02：M6-P4 T09 ORE 错误分类与恢复启动
+
+- 记录日期：2026-11-21；原始日志采集日期未单独提供。
+- 目标：核对 ORE 错误标志、恢复尝试及最终接收状态。
+- 方法：按此前 T09 ORE 故障测试流程触发并读取 `[M6RX]/[M6DIAG]/[M6ERR]` 快照。
+- 实际结果：`State=0 Err=1 LastErr=0x00000008`；`Retry=1 StartOK=1 AttemptFail=0 Exhausted=0 Gap=1`；`PE=0 NE=0 FE=0 ORE=1 DMA=0`；`PreStart=1 UReady=1 DReady=1`。
+- 故障轮数据统计：`ObservedByte=0 WritedByte=0 ConsumedByte=0 CheckedBytes=0 MismatchBytes=0`。
+- 结论：**PASS（ORE 标志分类及恢复启动控制路径）**。
+- 边界：本条独立日志没有故障后有效负载，不据此断言这一次 ORE 之后逐字节 771 B 无误。后续独立的正常数据回归见 `TEST-20261121-05`。
+
+## TEST-20261121-03：M6-P4 T10-A NE 软件模拟错误分类及恢复
+
+- 记录日期：2026-11-21；原始日志采集日期未单独提供。
+- 目标：验证 NE 错误的**软件模拟**分类与自动恢复分支。
+- 方法：执行 NE 软件故障用例，查看错误分类、恢复状态和 16 B 统计。
+- 实际结果：`State=0 Err=1 LastErr=0x00000002`；`Retry=1 StartOK=1 AttemptFail=0 Exhausted=0 Gap=1`；`PE=0 NE=1 FE=0 ORE=0 DMA=0`；`PreStart=1 UReady=1 DReady=1`；`ConsumedByte=16 PendingByte=0 StatsErrors=0 CheckedBytes=16 MismatchBytes=16`。
+- 结论：**PASS（NE 软件模拟的错误分类与恢复启动）**；**内容校验不作为本项通过证据**。
+- 边界：尚未核实该 16 B 使用的发送文件及 PRBS32 checker 状态偏移，不能将 `MismatchBytes=16` 直接解释为 UART 硬件传输错误，也不能宣称其逐字节通过。用户明确暂不要求真实 NE 硬件注入。
+
+## TEST-20261121-04：M6-P4 FE 连续错误恢复及后续数据校验
+
+- 记录日期：2026-11-21；FE 故障及后续数据测试由用户确认完成，原始采集日期未单独提供。
+- 目标：验证 FE 错误分类、发生后恢复启动，以及已知序列在恢复后的正确接收。
+- 已有故障阶段证据：此前 FE 测试记录显示连续三次错误后 `Err=3 LastErr=0x00000004 Retry=3 StartOK=3 AttemptFail=0 Exhausted=0 Gap=3`；表明错误分类及该窗口内的三次启动成功，未发生耗尽。
+- 已有数据阶段证据：用户确认 FE 恢复测试和随后的 PRBS32 数据校验完成；已提供过 771 B 回归 `ObservedByte=WritedByte=ConsumedByte=CheckedBytes=771`，`DropByte=PendingByte=StatsErrors=MismatchBytes=0`。
+- 结论：**PASS（按用户已确认的 FE 恢复流程和 771 B 数据回归范围）**。
+- 证据解释：FE 注入阶段的 `Err/Retry/StartOK` 与重启/新测试运行中的零错误数据快照是不同阶段证据，不宣称单个零错误快照出现了 FE；未提供物理波形、恢复耗时或最坏故障间隔的上界。
+
+## TEST-20261121-05：M6 UART RX DMA 771 B PRBS32 正常数据回归
+
+- 记录日期：2026-11-21；串口日志未附单独采集时间戳。
+- 目标：以 3 × 257 B 的已知 PRBS32 数据检查 Circular DMA → 字节 Ring Buffer → UARTTask 的接收、写入、消费与内容校验闭环。
+- 方法：发送分包数据，停止发送后观察多轮 `[DAR]/[M6RX]/[M6DIAG]/[M6ERR]` 与 FreeRTOS 资源摘要；每次快照均保持同一计数结果。
+
+| 统计项 | 实际结果 |
+| --- | ---: |
+| `ObseredByte`（日志原拼写）/ `WritedByte` | 771 B / 771 B |
+| `ConsumedByte` / `PendingByte` | 771 B / 0 B |
+| `CheckedBytes` / `MismatchBytes` | 771 B / 0 B |
+| `DropByte` / `StatsErrors` | 0 / 0 |
+| `State` / `Err` / `LastErr` | 0 / 0 / `0x00000000` |
+| `Retry` / `StartOK` / `AttemptFail` / `Exhausted` / `Gap` | 全为 0 |
+| `PE` / `NE` / `FE` / `ORE` / `DMA` | 全为 0 |
+| `HeartFree` / `UARTFree` | 384 B / 376 B |
+| `Heap` / `MinHeap` | 12368 B / 12368 B |
+
+- 结论：**PASS（本次正常态 771 B PRBS32 端到端计数和内容回归）**。观察窗口未出现新的数据不匹配或统计增长。
+- 重要边界：`Err=0 Retry=0` 说明此日志处于无已计入错误的测试阶段，本项**本身**不是 FE/ORE 故障触发证据。`UReady=0 DReady=0 DMAR=0 DMA_EN=0` 与本轮成功收数并存，可能与诊断采样口径有关；仅凭快照无法判定真实 DMA 运行状态，需核对源码及采样时点。当前未提供关闭全部测试宏并烧录正式版后的最终独立回归日志。
+
+## TEST-20261121-06：M6-P4 T11-A DMA 错误回调软件模拟（观察记录，专项暂缓）
+
+- 记录日期：2026-11-21；此条不纳入本轮正式 DMA 故障验收。
+- 既有观察：软件回调模拟中 `State=0 Err=1 LastErr=0x00000010`；`Retry=1 StartOK=1 AttemptFail=0 Exhausted=0 Gap=1`；`PE=0 NE=0 FE=0 ORE=0 DMA=1`；`AbortRx=1 PreStart=1`。16 B 测试片段的 `CheckedBytes=16 MismatchBytes=16`，没有核实输入向量与校验期望偏移。
+- 当前决定：根据本轮要求，**DMA 专项测试暂缓，不评为 PASS**；仅保留上述已有软件路径观察，不能外推真实 DMA TE/DME/FE 中断、异步 Abort 完成竞态、再次接收完整性或最坏恢复时间。

@@ -250,3 +250,44 @@
 - 原因：使用最少改动揭示任务处理及时性与 DMA 硬件运行独立性，不把 ADC Error 当作软件缓存数据完整性结论。
 - 验证：0/50 Tick 时 Late=0；250 Tick 时 Late=`27→57→87`；正常模式恢复后 `Half=73/73 Full=72/72 Late=0 Error=0`。
 - 影响/边界：Late 采用最近回调时间戳，重复通知可能覆盖时间戳；当前结果证明超时检测对人为延时有响应，不能确定准确的覆盖元素数量或证明最大负载无丢失。Tick=毫秒需依据 `configTICK_RATE_HZ` 校准。
+
+## DEC-20261101-01：M6-P2 以 DMA Normal + IDLE 和按值消息队列建立最小接收基线
+
+- 状态：已接受，基础功能板级验证通过；连续流无损不在本决策的已验收范围。
+- 决策：USART2（PD5/PD6、115200/8N1）RX 配置 DMA1 Stream5 Channel4、Peripheral-to-Memory、Normal、Byte 对齐与 USART2/DMA1 Stream5 IRQ。应用使用 `HAL_UARTEx_ReceiveToIdle_DMA()`，64 B 接收区，区分 IDLE、TC 与 HT；以 CMSIS-RTOS2 非阻塞消息队列按值传递接收区间，由已有 UARTTask 消费；阻塞 Logger 仍仅在任务上下文使用。
+- 原因：先验证从 UART DMA 中断到 FreeRTOS Task 的不定长收包、消息所有权和边界长度，避免直接引入 Circular DMA、多次回绕和协议解析等变量。
+- 验证：1/4/6/31/32/63/64 B 与二进制数据通过；64 B TC=0、短数据 IDLE=2；11 次 ASCII 11 B 正常通信 `Count=11 Drop=0 StartFail=0`。
+- 影响：此为 M6-P2 功能基线，不宣称传输报文必须一一对应 IDLE 事件；Normal DMA 每次结束后的重启窗口仍可能丢字节，不能据 `StartFail=0` 声明端到端无损。
+
+## DEC-20261101-02：UART 正常接收事件与真实错误统计分离
+
+- 状态：已接受，正常接收的错误计数误累加已修正并实测。
+- 决策：`HAL_UARTEx_RxEventCallback()` 只处理接收长度/事件和数据流；错误统计由 `HAL_UART_ErrorCallback()` 在有非零 `HAL_UART_ERROR_*` 标志时更新。关闭临时 FE/ORE 软件注入后才进行正式正常通信统计；ISR 内不进行同步日志输出。
+- 原因：曾将错误记录函数放在普通接收回调中，`TotalError` 随正常接收增加、LastError=0，造成误报。
+- 验证：2026-11-01 正常 ASCII 测试 11 次，每次 `Size=11 Event=2`，`Total=0 PE=0 NE=0 FE=0 ORE=0 DMA=0 Last=0x00000000`；两组压力日志亦始终为零。
+- 影响/边界：修正了正常工作时的错误统计语义；真实 FE/ORE 物理故障注入和 HAL/DMA 错误后自动恢复**尚未验收**。
+
+## DEC-20261101-03：消息队列扩容仅作为吞吐诊断，M6-P3 改用持续接收结构
+
+- 状态：已接受阶段性对照结论；M6-P3 目标结构待实现和板级验证。
+- 决策：用 8 格与 64 格消息队列对照测试消费背压，不将无限增大队列当作最终连续流方案；后续拟采用 USART2 Circular DMA + 独立 `uint8_t` 字节 Ring Buffer + Task 消费与溢出计数。M4 的 `uint32_t[8]` Task↔Task SPSC 历史模块保留，不直接作为 UART 字节流缓冲实现。
+- 原因：8 格组在 13 条长 ASCII 发送压力下已观察 `Drop=49`；64 格组 `Drop=0`，但额外占用 Free Heap 4032 B，Normal DMA 重启空窗未消除。
+- 影响：M6-P3 必须分清 DMA 已报告字节、成功缓存字节、消费字节及队列/Ring Buffer 拒绝次数；连续输入、回绕与端到端字节顺序的验证独立进行。即使软件队列没有满，也不能直接据此证明端到端零丢字节。
+
+## DEC-20261112-01：M6-P3 采用 Circular DMA 和独立字节环
+
+- 状态：已接受，板级验收通过，代码 `3136142` 已推送 `feature/m6-baseline`。
+- 决策：USART2 RX 采用 256 B Circular DMA。HT/TC/IDLE 统一以 DMA 当前位置差分搬运。软件环 1024 格，保留一格判满，生产者发布 `head`，消费者发布 `tail`，按 C11 release/acquire 同步。
+- 满环策略：保留已缓存数据，拒绝放不下的新字节并按实际字节量累计 `DropBytes`。DMA 游标继续推进。UARTTask 在短临界区获取计数快照，在任务上下文打印和校验。
+- 原因：延续 `DEC-20261101-03` 的背压诊断结果，减少 Normal DMA 每次接收结束后的重启空窗，并为连续字节流提供明确的缓存和丢弃语义。
+- 验证：10/50 KiB 逐字节校验、单字节错误检出、2048 B 溢出和 257 B 恢复均通过。见 `TEST-20261112-01`～`TEST-20261112-03`。
+- 后续：真实 UART/DMA 错误后的恢复和最坏响应时间由 M6-P4 验证。
+
+
+## DEC-20261121-01：M6-P4 将错误恢复控制路径与接收数据完整性分开验收
+
+- 状态：已接受（验收口径与本轮暂缓范围）；并非宣告 M6 全部功能最终关闭。
+- 决策：对 UART RX DMA 恢复分别记录 `State/LastErr/Retry/StartOK/AttemptFail/Exhausted/Gap` 和 `Observed/Writed/Consumed/Checked/Drop/Pending/Mismatch`，只有对应阶段有直接数据时才宣布相应验收通过。将软件注入与真实物理故障明确区分，不把正常态 `Err=0` 的数据日志描述成故障发生日志。
+- 验证依据：T08-A/B 两条重试分支分别回到 `State=0` 与进入 `State=4`；T09 ORE 错误分类及一次成功重启；T10-A NE 软件模拟分类与恢复；FE 故障阶段及后续 771 B PRBS32 数据回归按用户确认完成；正常态独立 771 B 校验 `Mismatch=Drop=0`。见 `TEST-20261121-01`～`TEST-20261121-05`。
+- 范围控制：真实 NE 硬件注入不作为本轮已完成证据；按用户本轮要求暂缓 DMA 真实故障/异步 Abort 专项，T11-A 软件回调模拟仅归档观察、不作为 DMA 硬件路径 PASS。UART TX DMA、协议任务与最坏中断/恢复时延仍未验收。
+- 影响：M6-P4 状态记为“UART 已测恢复分支通过、专项覆盖未完成”，而不是“全部硬件异常恢复完成”。正式固件关闭注入宏、Clean Build、烧录与最终独立回归需在 Git 收尾前按实际结果记录；尚无本轮完整证据，不能预填完成状态或提交哈希。

@@ -1983,3 +1983,175 @@ MinHeap=4568 B
 ## 明天下一步
 
 先保存稳定运行的代码快照，执行 `git status --short`、`git diff --ignore-space-at-eol --stat`、`git diff --check`；复核 `.ioc` 与新增生成代码、确认无压力测试专用延时；按功能提交和测试文档提交分批暂存、审核、Commit/Push，再根据路线图决定是否进入下一里程碑。
+
+# 2026-11-01
+
+## 今日计划
+
+- 以已完成的 M5 归档与 M6 开发分支为起点，建立 USART2 RX DMA + IDLE Normal 模式的最小链路。
+- 解决 CubeMX 再生成后 CRLF/LF 工作区噪音，保留实际 M6 配置变更。
+- 完成边界长度、二进制和消息队列压力验证；纠正 HAL UART 错误计数统计；规划 M6-P3 连续接收。
+
+## 实际完成
+
+- Git 起点：用户确认 `feature/m6-baseline` 起始 HEAD `30b0072`，与 `main`、`origin/main` 同指向 M5 PR #6 合并提交。进入 M6-P1 后经 Git Diff 审核、换行符清理，工作区只保留 `.ioc`、`Inc/stm32f4xx_it.h`、`Src/dma.c`、`Src/stm32f4xx_it.c`、`Src/usart.c` 五个预期生成文件修改；`78 insertions(+), 1 deletion(-)`，`git diff --check` 无输出。此状态为 M6-P1 时点快照，不代表之后 UART 接收业务代码已提交。
+- CubeMX 采用 USART2（PD5 TX、PD6 RX，115200/8N1），RX 使用 DMA1 Stream5 Channel4、Peripheral-to-Memory、Normal、Byte 对齐，USART2 和 DMA1 Stream5 中断开启；不在 M6 重新设计 M5 ADC/DMA2。
+- 在现有 FreeRTOS UARTTask 运行链上实现 `HAL_UARTEx_ReceiveToIdle_DMA()` + `HAL_UARTEx_RxEventCallback()`；Normal 模式使用 64 B DMA 接收缓冲区，通过 ISR 非阻塞 `osMessageQueuePut()` 将按值复制的数据交给任务；HT 不作为独立完整帧处理，IDLE/TC 完成后重新启动 DMA。
+- 单包/边界测试确认 1、4、6、31、32、63、64 B 与二进制数据接收正确。64 B 对应 `Event=0`（TC），短于 64 B 对应 `Event=2`（IDLE）；其中 31/63 B 通过为用户直接确认，未提供这两组的独立原始串口片段。
+- 发现 UART 错误统计函数曾从正常 RX 回调调用，导致 `TotalError` 累加正常事件次数；用户已修正调用位置。重新启动并关闭软件 FE/ORE 注入后，11 次发送 ASCII `01 02 03 04` 均得到 11 B 正确接收（`30 31 20 30 32 20 30 33 20 30 34`），`Count=11 Drop=0 StartFail=0`，`TotalError/PE/NE/FE/ORE/DMA=0`。
+- 采用相同的 13 条长 ASCII 发送记录开展 8 格与 64 格队列对照压力测试；每条发送文本为 3599 字符（按日志文本计，串口工具实际在线发送字节以对应工具设置为准）。8 格组末次观测 `Count=747 Drop=49 StartFail=0`，Heap/MinHeap `11704 B`，UARTFree 最低 344 B；64 格组末次 `Count=753 Drop=0 StartFail=0`，Heap/MinHeap `7672 B`，UARTFree 最低 336 B。两组所有可见 `[RXE]` 统计均为 0。
+- 队列从 8 格扩至 64 格时 Free Heap 下降 `4032 B`，与新增 56 项、约 72 B/项相符。64 格组仅证实观察窗口没有入队失败，**不代表 Normal DMA 重新启动窗口内无丢字节，也未完成发送端与消费端逐字节总量校验**。
+
+## 验收情况
+
+- M6-P1 生成代码有效 Diff 已收敛，LF/CRLF 噪音不再影响 `git status` 审核；此前提供的 `git diff --check` 无空白错误。
+- M6-P2 Normal DMA + IDLE/TC 单次接收和 ISR → Queue → UARTTask 基本链路：**PASS（功能基线）**。
+- 正常短报文、错误统计语义纠正：**PASS（11 次 ASCII 实测及零错误统计）**。
+- 压力对照：8 格队列 `Drop=49`，不满足零入队丢弃；64 格队列本轮 `Drop=0`，但端到端完整性仍未验证，不作零丢字节声明。
+- 压力测试阶段可见 USART 错误计数为 0、`StartFail=0`；不能推断真实 FE/ORE 硬件故障注入及错误后自动恢复已通过。
+
+## 未完成
+
+- M6-P3 Circular DMA + 字节 Ring Buffer、连续流无重复/漏字节序列验证、溢出处理、ISR/Task 时序及 UART 异常恢复尚未实现与验收。
+- M6-P2 当前业务代码与文档的最终 Debug Clean Build、Git Commit/Push、最新工作区 clean 尚无用户提供的终端证据；需确认后方可填写提交哈希。
+- M6 本阶段不要求再次执行 M5 ADC/DMA2 回归；此选择不等于宣称 M5 功能已在新固件下重新回归。
+
+## 今日 Bug
+
+- CubeMX 再生成造成多份 CRLF/LF Git 误修改，现经有差异保护的恢复整理收敛（`ERR-20261101-01`）。
+- 错误统计函数被放进正常 RxEvent 回调，`TotalError` 不是真实硬件错误次数；移除误调用后正常测试计数保持 0（`ERR-20261101-02`）。
+- 高吞吐输入时 8 格 Queue 出现已确认的入队失败 `Drop=49`；64 格暂缓解，整体仍有 Normal DMA 接收空窗风险（`ERR-20261101-03`）。
+
+## 今日学习
+
+- HAL_UARTEx 的 RxEvent（IDLE/TC/HT）与 HAL_UART_ErrorCallback 是独立语义，`ErrorCode=0` 不得算错误。
+- `Drop` 是队列入队失败次数，和 FE/ORE、HAL 接收启动返回码不同；扩容缓冲能缓解背压，但并不消除 DMA 停止/重新启动间隙。
+- ASCII `01 02 03 04` 占 11 B，HEX 显示为 `30 31 20 30 32 20 30 33 20 30 34`；发送字面内容和实际 UART 字节应区分。
+- Git 必须同时核对 `status`、真实 Diff 与 EOL 属性，保护 CubeMX 已生成的有效功能修改。
+
+## 尚未理解
+
+- Normal DMA 重启窗口的实际漏字节数如何独立测量，以及没有 FE/ORE 时怎样做端到端连续性证明（`KG-016`）。
+- Circular DMA 位置差分、HT/TC/IDLE 事件重叠与 Ring Buffer 单生产者/单消费者数据所有权如何可靠处理（`KG-015`、`KG-016`）。
+
+## Git
+
+- 基线：`30b0072`，`Merge pull request #6 from wwu15768-byte/feature/m5-adc-timer-dma-baseline`；用户已切到 `feature/m6-baseline`。
+- M6-P1 清理后的 Git Diff：5 个预期文件，`78 insertions(+), 1 deletion(-)`，`git diff --check` 无输出。
+- 目前未提供 M6-P2 功能提交、文档提交或 `git push` 的确认输出，不填写不存在的 Commit Hash。
+
+## 明天下一步
+
+先保存并审核 M6-P2 正常接收基线（检查 Debug 构建、Git Diff/状态与文档），再按 `ROADMAP.md` 分阶段推进 M6-P3 Circular DMA + 独立字节 Ring Buffer；采用发送端确定的字节总数/递增序列及接收端总量、连续性、Overflow 计数进行压力验收。
+
+# 2026-11-12
+
+## 今日计划
+
+- 完成 M6-P3 Circular DMA 长流逐字节校验、软件环溢出与恢复接收验收。
+- 清理 CubeMX 再生成差异，关闭溢出测试暂停，提交并归档 M6-P3。
+
+## 实际完成
+
+- 回顾前置基线：M6-P2 功能 `7d6b3dd`、测试文档 `bd6d2cf` 已提交。Debug Clean Build 通过，RAM `21728 B`、FLASH `41168 B`、CCMRAM `0 B`。用户确认 1/4/63/64 B 板级复核通过，Drop、StartFail 和 UART 错误统计均为 0。
+- USART2 保持 115200/8N1，DMA1 Stream5 Channel4 改为 Circular。RX DMA 区 256 B，`HAL_UARTEx_RxEventCallback()` 通过 DMA 剩余传输数计算新增区间，处理 HT/TC/IDLE 和游标回绕。正常回调持续接收，不反复重启 DMA。
+- 以独立 `uint8_t[1024]` 软件环替换 P2 消息队列，预留一格，有效容量 1023 B。回调发布原子 `head`，UARTTask 发布原子 `tail`。环满时保留旧字节，按实际拒绝量累计 `DropBytes`。
+- UARTTask 每轮最多读 4 个 64 B 块，当前 `osDelay(10U)`。任务在短临界区内抓取计数和环索引，退出后打印。用 xorshift32 固定种子 `0x13579BDF` 校验长流，跨块保留期望状态。
+- 归档前核对 54 个改动文件：46 个纯换行、5 个 ADC 驱动文件仅新增末尾空行。清理后仅保留 `.ioc`、`Src/usart.c`、`Src/freertos.c`。用户确认 `M6_OVERFLOW_TEST=0U`、Debug 构建通过、`git diff --cached --check` 无输出。
+
+## 验收情况
+
+- 257 B 跨 DMA 边界两次通过，板端累计 `0 → 257 → 514 B`，丢弃和记账错误均为 0。
+- 10 KiB 与 50 KiB 原始测试数据单次发送，`Observed=Buffered=Consumed=CheckedBytes` 分别为 10240、51200，`Drop=Pending=StatsErrors=MismatchBytes=0`。50 KiB 副本仅修改第 65 字节 `39 → 38`，板端完整消费 51200 B，`MismatchBytes=1`。
+- 暂停 UARTTask 消费后发送 2048 B，满环快照 `Obs=2048 Buf=1023 Drop=1025 Con=0 Pending=1023`。排空后校验 1023 B 且 `MismatchBytes=0`，确认保留的是最先到达的 1023 B。
+- 保持同次运行，排空后再发送恢复向量 257 B，最终 `Observed=2305`、`Buffered=Consumed=CheckedBytes=1280`、`Drop=1025`、`Pending=MismatchBytes=StatsErrors=0`，恢复段新增丢弃 0 B。
+- 内容校验日志中 UARTFree 为 480 B，溢出恢复日志中为 456 B，HeartFree 为 384 B，Heap/MinHeap 均为 12368 B。详细记录见 `TEST-20261112-01`～`TEST-20261112-03`。
+
+## 未完成
+
+- 真实 UART FE/ORE 或 DMA 硬件错误注入及接收自动恢复。已验收的恢复场景是软件环溢出后恢复消费。
+- DMA 事件至数据复制完成的最坏时延和长时间高负载范围尚待测量。
+
+## 今日 Bug
+
+- 本阶段曾将读取输出参数误声明为 `const uint8_t *`，已修正。`M6_RingWrite()` 多报一个字节、消费计数来源不一致、pending 公式和日志 Tick 口径错误均已修正，后续板级统计与内容校验通过。
+- 早期长流试验把带空格 HEX 文本作为 ASCII 发送，10240 组字节文本实际为 30719 个字符。改用 HEX 模式和原始二进制文件后按发送字节数对账通过。
+- CubeMX 行尾与末尾空行问题见 `ERR-20261112-01`。
+
+## 今日学习
+
+- DMA 游标和软件环索引按各自容量回绕。环满后仍推进 DMA 旧游标，避免重复处理已经拒绝的数据。
+- 记账等式、逐字节比较和硬件错误统计各有独立含义。通过暂停消费者并比对前缀，可以同时验证溢出字节数和旧数据顺序。
+
+## 尚未理解
+
+- 硬件错误导致 DMA 接收中止后的恢复顺序、恢复失败计数和实测恢复时间。
+
+## Git
+
+- 当前分支 `feature/m6-baseline`，代码提交 `3136142`（`feat: add USART2 circular DMA RX and byte ring buffer`）。2026-11-12 通过 `git ls-remote` 确认远程分支与本地 HEAD 同为 `31361427e017e3c053dc1c087fa2763e96eb3cd2`，更新文档前工作区干净。
+
+## 明天下一步
+
+归档本阶段文档，按 M6-P4 设计并验证 UART/DMA 硬件异常后的接收恢复，补充回调时延证据。
+
+
+# 2026-11-21
+
+> 本条为 M6-P4 验收资料同步日；故障注入及原始串口日志的实际采集日期未逐项提供，不反推它们全部发生于今日。
+
+## 今日计划
+
+- 汇总 M6 UART RX DMA 错误恢复分支、FE/ORE/NE 测试和 PRBS32 回归证据。
+- 明确 DMA 专项暂缓边界，并同步阶段状态、测试、知识缺口与交接资料。
+
+## 实际完成
+
+- 整理 T08-A：故障恢复模拟连续两次启动失败后第三次成功，`Retry=3 StartOK=1 AttemptFail=2 Exhausted=0`，最终 `State=0`；T08-B：三次启动均失败，`Retry=3 StartOK=0 AttemptFail=3 Exhausted=1`，最终 `State=4`。
+- 整理 T09 ORE：`LastErr=0x00000008`、`ORE=1`，一次恢复尝试成功，`Retry=1 StartOK=1 AttemptFail=0 Exhausted=0`，最终 `State=0`。该轮故障触发日志 `ObservedByte=0`，不能单独充当恢复后字节完整性证明。
+- 整理 T10-A NE 软件模拟：`LastErr=0x00000002`、`NE=1`，一次恢复尝试成功，最终 `State=0`。模拟测试的 16 B 片段 `CheckedBytes=16 MismatchBytes=16`，原始文件/校验状态未在本轮资料中核实，不能据此判定恢复链路数据损坏或通过内容校验。
+- 整理 FE 恢复：用户确认 FE 恢复及恢复后数据测试完成；此前 FE 日志曾显示 `Err=3 LastErr=0x00000004 Retry=3 StartOK=3 AttemptFail=0 Exhausted=0 Gap=3`。FE 故障计数与随后数据完整性回归应分别保留证据。
+- 整理最新独立 771 B PRBS32 回归：`ObservedByte=WritedByte=ConsumedByte=CheckedBytes=771`，`DropByte=PendingByte=StatsErrors=MismatchBytes=0`；多轮快照保持一致，正常状态 `State=0 Err=0 LastErr=0`。这一轮的零错误统计不能当作 FE/ORE 故障注入日志。
+- 本次 771 B 日志可见 `HeartFree=384 B UARTFree=376 B Heap=MinHeap=12368 B`，无观测窗口内的计数或堆余量变化。
+- DMA T11-A 回调模拟此前有分类及恢复路径日志，但按本轮要求暂时忽略 DMA 专项，不将软件模拟解释为真实 DMA 硬件故障覆盖。
+
+## 验收情况
+
+- **PASS**：T08-A 两次失败后成功、T08-B 三次失败耗尽，均与预期状态分支一致。
+- **PASS（已测错误控制路径）**：ORE 分类与恢复启动；NE 软件模拟分类与恢复启动。
+- **PASS（用户确认，须保留分段证据）**：FE 错误后恢复及数据回归；此前故障日志与数据校验日志不应混作同一快照。
+- **PASS（正常数据回归）**：771 B PRBS32 全量写入、消费并逐字节匹配，无软件环丢弃、积压或统计错误。
+- **暂缓**：DMA 真实故障与异步 Abort 竞态专项；真实 NE 硬件注入尚未验证。
+
+## 未完成
+
+- 关闭/核对所有临时注入宏的正式固件配置、最终 Clean Build、烧录正式固件后的独立 771 B 回归，尚无本轮完整命令/日志证据。
+- M6-P4 当前改动的 Git 差异、提交与远程推送状态未提供；不能沿用 P3 的 `3136142` 冒充最新 P4 提交。
+- DMA 最坏响应/数据覆盖时延、真实 DMA 故障路径及诊断字段采样语义尚待验证。
+
+## 今日 Bug
+
+- 本轮没有足够证据确认新的代码根因型缺陷，不新增 `ERROR_LOG.md` 错误编号。
+- 正常 771 B 快照同时显示 `State=0` 与 `UReady=0 DReady=0 DMAR=0 DMA_EN=0`；这些诊断值是否为恢复期/非实时快照尚不确定，记录为待核实问题，不能据此直接宣称 DMA 关闭。
+
+## 今日学习
+
+- 恢复控制路径的 `Retry/StartOK/AttemptFail/Exhausted/State` 与数据层 `Observed/Writed/Consumed/Checked/Drop/Mismatch` 必须分开验收。
+- 软件模拟错误分类不等于真实物理故障覆盖；无数据错误的常态快照也不能替代故障发生时的证据。
+- PRBS 校验发生不匹配前，需要确认发送向量、复位状态和期望序列偏移，不能仅凭 16 B 的不匹配数推断接收字节出错。
+
+## 尚未理解
+
+- DMA 错误、异步中止竞态与真实 NE 注入条件（参见 `KG-015`）。
+- 恢复路径相关诊断寄存器/状态的采样时间，以及恢复时 DMA 覆盖与最坏响应时间（参见 `KG-016`）。
+
+## Git
+
+- 已知历史基线：`feature/m6-baseline`，M6-P3 推送的代码提交 `3136142`（截至 2026-11-12 的确认）。
+- 未提供当前 `git status`、P4 `git log` 或 `git push` 结果，本次仅归档文档；不填写新的固件提交哈希。
+
+## 明天下一步
+
+1. 审核并关闭临时故障注入配置；执行正式 Debug Clean Build、烧录及 771 B PRBS32 独立回归。
+2. 对照最新源码核实诊断快照语义，再确认 M6 本阶段是否达到关闭条件。
+3. 检查文档和代码 Git Diff，按实际结果分别提交与推送；DMA/真实 NE 的未覆盖范围保留在状态文档中。
