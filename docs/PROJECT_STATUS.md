@@ -3,15 +3,15 @@
 > 唯一回答：项目现在在哪？
 > 更新时机：项目状态发生明显变化时。
 
-更新时间：2026-11-12
+更新时间：2026-11-21
 
 ## Current Milestone
 
-M6：USART2 DMA + IDLE 不定长通信。M6-P1/P2 的 Normal DMA 功能基线与文档已归档。M6-P3 的 Circular DMA、字节环、长流内容与软件溢出恢复已通过板级验证，代码提交 `3136142` 已推送至 `feature/m6-baseline`。
+M6：USART2 DMA + IDLE 不定长通信（仍在收尾）。P1/P2 基线已归档；P3 Circular DMA、字节环、长流及软件溢出恢复已通过；P4 已验证部分 UART 故障恢复控制路径、FE 恢复和 771 B 数据回归。DMA 真实故障专项按当前计划暂缓，真实 NE 硬件故障未验证；正式配置 Clean Build、烧录和最终回归/提交尚待取得证据。已确认的 M6-P3 Git 基线仍为 `3136142`（2026-11-12 已推送），不能视作最新 P4 提交。
 
 ## Current Goal
 
-以已验证的 M6-P3 为基线，完成本阶段文档归档，随后验证 UART/DMA 硬件错误后的接收恢复。当前接收链路为：
+在已验证 M6-P3 与已测 M6-P4 错误恢复路径的基础上，核对正式构建配置并完成最终可复现回归，再整理 Git 收尾。当前数据接收链路（沿用 P3 架构；P4 新源码细节未随本次压缩包提供）为:
 
 ```text
 USART2 RX / PD6 / 115200 8N1
@@ -297,34 +297,45 @@ USART2 RX / PD6 / 115200 8N1
 - M6-P2 归档：功能 `7d6b3dd`、测试文档 `bd6d2cf`。Debug Clean Build 和 1/4/63/64 B 板级复核通过。
 - M6-P3 板级验收：257 B 跨界；10/50 KiB 长流逐字节校验；50 KiB 单字节错误检出；2048 B 溢出与 257 B 恢复。详见 `TEST-20261112-01`～`TEST-20261112-03`。
 
+- M6-P4 的 T08-A/B 软件恢复分支对照完成：两次失败后第三次成功 `State=0 Retry=3 StartOK=1 AttemptFail=2 Exhausted=0`；三次失败耗尽 `State=4 Retry=3 StartOK=0 AttemptFail=3 Exhausted=1`。
+- T09 ORE 错误分类与恢复启动已测：`LastErr=0x00000008 ORE=1 Retry=1 StartOK=1 State=0`；该故障轮 `ObservedByte=0`，不将其写成数据完整性测试。
+- T10-A NE **软件模拟**分类与恢复启动已测：`LastErr=0x00000002 NE=1 Retry=1 StartOK=1 State=0`；16 B 模拟数据的校验偏移未核对，不宣称逐字节匹配。真实 NE 硬件注入未执行。
+- FE 连续错误恢复按用户已确认的流程完成；历史 FE 阶段曾显示 `Err=3 LastErr=0x00000004 Retry=3 StartOK=3 Exhausted=0 Gap=3`，恢复后数据回归见 `TEST-20261121-04`，故障与数据日志为分阶段证据。
+- 独立 771 B PRBS32 正常数据回归已通过：`Observed=Writed=Consumed=Checked=771`，`Drop=Pending=StatsErrors=Mismatch=0`；连续快照稳定，HeartFree=384 B、UARTFree=376 B、Heap/MinHeap=12368 B。
+
 ## In Progress
 
-- 汇总并审阅 M6-P3 的开发与验收文档。
-- M6-P4 待开展 UART FE/ORE、DMA 错误与恢复测试，补充中断响应和搬运耗时证据。
+- 按最新源码和正式固件配置检查所有临时故障注入开关，并完成最终 Clean Build、烧录、独立 771 B 正常/需要的 FE 回归。
+- 对照恢复实现核实 `[M6DIAG] UReady/DReady/DMAR/DMA_EN` 的采样口径，补齐恢复后硬件状态的直接证据。
+- 汇总 M6-P4 的最新 Git Diff、提交与远程状态；本次文件包仅含 `docs/`，没有 P4 源码与新提交证据。
 
 ## Blocked
 
-当前没有已确认的外部阻塞。硬件异常注入条件和恢复验收用例尚待确定。
+- 没有已确认的外部硬件阻塞。真实 NE 故障暂不要求；DMA 专项（真实错误/异步 Abort 竞态）按用户当前安排暂缓，不应记为已验收。
+- 正式固件验收和 P4 Git 收尾缺少本轮可核验的命令/源代码材料，属于待执行/待提供证据，而不是已确认缺陷。
 
 ## Known Bugs
 
-- M6-P2 的正常回调误计 UART 错误已修复。8 格队列背压和 Normal DMA 重启窗口作为历史基线记录保留。
-- 2026-11-12 CubeMX 换行与新增 EOF 空行已清理，保留 3 个业务文件。详见 `ERR-20261112-01`。
-- 2048 B 暂停消费时的 1025 B 丢弃符合已验证的满环策略。提交中 `M6_OVERFLOW_TEST=0U`。
+- M6-P2 误计 RxEvent 为 UART 错误已修复；Normal DMA 重启空窗和 8 格队列背压作为历史对照保留。
+- M6-P3 CubeMX 换行及末尾空行差异已清理，软件环满时按策略发生的 1025 B 丢弃不是新 Bug。
+- 最新 771 B 正常回归中 `State=0` 与 `UReady=DReady=DMAR=DMA_EN=0` 并存；未拿到诊断采样代码，暂不判为故障或已修复问题，见 `KG-015`。
+- 本轮无新确认根因，`ERROR_LOG.md` 不新增条目。
 
 ## Current Branch
 
-- `feature/m6-baseline` 从 M5 合并点 `30b0072` 创建。P2 代码 `7d6b3dd`，文档 `bd6d2cf`，P3 代码 `3136142`。
-- 2026-11-12 直接查询远程分支，远程引用与本地 HEAD 均为 `31361427e017e3c053dc1c087fa2763e96eb3cd2`。该代码提交包含 `.ioc`、`Src/usart.c`、`Src/freertos.c`。
+- 上次明确核对：`feature/m6-baseline`；P2 代码 `7d6b3dd`、文档 `bd6d2cf`、P3 代码 `3136142`。
+- 2026-11-12 已核验本地/远程 P3 提交一致；**2026-11-21 尚未取得 P4 当前分支/HEAD/Push 的新证据**，不得据旧基线声称 P4 已提交。
 
 ## Last Verified Function
 
-- 257 B 两轮累计 514 B。10240/51200 B 原始长流消费与校验量等于发送量，`MismatchBytes=0`。50 KiB 单字节修改用例检出恰好 1 个不匹配。
-- 溢出时 2048 B 中前 1023 B 逐字节一致，拒绝 1025 B。恢复 257 B 后累计 `Observed=2305`、`Buffered=Consumed=Checked=1280`、`Drop=1025`，`Pending=MismatchBytes=StatsErrors=0`。
-- 内容校验与溢出恢复日志的 UARTFree 分别为 480 B、456 B，HeartFree 384 B，Heap/MinHeap 12368 B。关闭溢出测试暂停后 Debug 构建通过。
+- M6-P3：257 B 跨界、10/50 KiB 内容校验、单字节错误检出、2048 B 软件环溢出保留 1023 B 与恢复 257 B（`TEST-20261112-01`～`03`）。
+- M6-P4 控制路径：T08-A/B 重试成功/耗尽、T09 ORE 分类及恢复启动、T10-A NE 软件模拟分类及恢复启动均已测（`TEST-20261121-01`～`03`）。
+- FE：用户确认故障恢复及恢复后数据回归完成，保留 FE 故障阶段与随后 771 B 数据阶段的证据区分（`TEST-20261121-04`）。
+- 771 B PRBS32：本次正常日志 `Observed=Writed=Consumed=Checked=771`、`Drop=Pending=StatsErrors=Mismatch=0`，重复快照一致；资源 `HeartFree=384 B UARTFree=376 B Heap=MinHeap=12368 B`（`TEST-20261121-05`）。
+- T11-A DMA 仅有既往**软件回调模拟**观察，本轮 DMA 专项暂缓，不纳入正式完成项（`TEST-20261121-06`）。
 
 ## Next Step
 
-1. 审阅 M6-P3 文档差异并完成文档归档。
-2. 按 M6-P4 设计 UART/DMA 硬件异常处理与恢复验证，记录错误类型、恢复结果和恢复后的接收序列。
-3. 测量连续输入时 DMA 事件至数据复制完成的时延，为后续 UART TX DMA 与协议任务提供边界。
+1. 对照实际 P4 源码核对故障注入宏、接收状态与诊断字段的采样时点，恢复正式配置。
+2. 正式 Clean Build → 烧录 → PRBS32 771 B 终态回归，留存构建与串口原始结果。
+3. 审核 `git status/diff`、提交并推送实际改动，随后判断 M6 是否达到当前协定的阶段关闭条件；DMA 真实故障和最坏时延留作明确未覆盖事项。

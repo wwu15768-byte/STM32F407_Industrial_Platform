@@ -2200,3 +2200,75 @@ Heap=3432 B        MinHeap=3432 B
 - 实际结果：`2048 − 1023 = 1025 B` 与丢弃量一致。前 1023 B 比较全部通过。恢复段缓存、消费和校验各增加 257 B，新增丢弃 0 B，全部 `[DAR]` 快照 `StatsErrors=0`。
 - 资源：恢复测试中 HeartFree 384 B、UARTFree 456 B、Heap/MinHeap 12368 B。
 - 结论：**PASS（软件环满策略、丢弃记账与同次运行恢复接收）**。正式提交 `3136142` 的 `M6_OVERFLOW_TEST=0U`，用户确认关闭暂停后 Debug 构建通过。UART/DMA 硬件错误后的自动恢复属于后续验收。
+
+
+## TEST-20261121-01：M6-P4 T08 恢复重试成功与耗尽的软件故障分支
+
+- 记录日期：2026-11-21；原始日志采集日期未单独提供。
+- 目标：区分恢复重试中“先失败后成功”和“全部失败耗尽”的状态机分支，不以重试计数代替真实数据校验。
+- 环境：M6 USART2 RX DMA 错误恢复测试固件；T08-A/T08-B 为软件受控故障模拟。
+- 方法：分别控制恢复尝试结果，检查 `State/Err/LastErr/Retry/StartOK/AttemptFail/Exhausted` 和诊断计数。
+
+| 用例 | State | Retry | StartOK | AttemptFail | Exhausted | 其他证据 |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| T08-A 两次失败后成功 | 0 | 3 | 1 | 2 | 0 | `Err=1 LastErr=0x00000004 Gap=1 PreStart=1` |
+| T08-B 三次失败耗尽 | 4 | 3 | 0 | 3 | 1 | `Err=1 LastErr=0x00000004 Gap=1 PreStart=0` |
+
+- 结果：T08-A 最终返回运行态；T08-B 停在失败态，没有把耗尽当作成功。两轮诊断 `AbortWait=BusyWait=AbortRx=0`。
+- 结论：**PASS（恢复控制状态机的两条软件模拟分支）**。
+- 边界：该项不是硬件 FE/ORE/DMA 注入，也未单独验证恢复后的字节完整性。
+
+## TEST-20261121-02：M6-P4 T09 ORE 错误分类与恢复启动
+
+- 记录日期：2026-11-21；原始日志采集日期未单独提供。
+- 目标：核对 ORE 错误标志、恢复尝试及最终接收状态。
+- 方法：按此前 T09 ORE 故障测试流程触发并读取 `[M6RX]/[M6DIAG]/[M6ERR]` 快照。
+- 实际结果：`State=0 Err=1 LastErr=0x00000008`；`Retry=1 StartOK=1 AttemptFail=0 Exhausted=0 Gap=1`；`PE=0 NE=0 FE=0 ORE=1 DMA=0`；`PreStart=1 UReady=1 DReady=1`。
+- 故障轮数据统计：`ObservedByte=0 WritedByte=0 ConsumedByte=0 CheckedBytes=0 MismatchBytes=0`。
+- 结论：**PASS（ORE 标志分类及恢复启动控制路径）**。
+- 边界：本条独立日志没有故障后有效负载，不据此断言这一次 ORE 之后逐字节 771 B 无误。后续独立的正常数据回归见 `TEST-20261121-05`。
+
+## TEST-20261121-03：M6-P4 T10-A NE 软件模拟错误分类及恢复
+
+- 记录日期：2026-11-21；原始日志采集日期未单独提供。
+- 目标：验证 NE 错误的**软件模拟**分类与自动恢复分支。
+- 方法：执行 NE 软件故障用例，查看错误分类、恢复状态和 16 B 统计。
+- 实际结果：`State=0 Err=1 LastErr=0x00000002`；`Retry=1 StartOK=1 AttemptFail=0 Exhausted=0 Gap=1`；`PE=0 NE=1 FE=0 ORE=0 DMA=0`；`PreStart=1 UReady=1 DReady=1`；`ConsumedByte=16 PendingByte=0 StatsErrors=0 CheckedBytes=16 MismatchBytes=16`。
+- 结论：**PASS（NE 软件模拟的错误分类与恢复启动）**；**内容校验不作为本项通过证据**。
+- 边界：尚未核实该 16 B 使用的发送文件及 PRBS32 checker 状态偏移，不能将 `MismatchBytes=16` 直接解释为 UART 硬件传输错误，也不能宣称其逐字节通过。用户明确暂不要求真实 NE 硬件注入。
+
+## TEST-20261121-04：M6-P4 FE 连续错误恢复及后续数据校验
+
+- 记录日期：2026-11-21；FE 故障及后续数据测试由用户确认完成，原始采集日期未单独提供。
+- 目标：验证 FE 错误分类、发生后恢复启动，以及已知序列在恢复后的正确接收。
+- 已有故障阶段证据：此前 FE 测试记录显示连续三次错误后 `Err=3 LastErr=0x00000004 Retry=3 StartOK=3 AttemptFail=0 Exhausted=0 Gap=3`；表明错误分类及该窗口内的三次启动成功，未发生耗尽。
+- 已有数据阶段证据：用户确认 FE 恢复测试和随后的 PRBS32 数据校验完成；已提供过 771 B 回归 `ObservedByte=WritedByte=ConsumedByte=CheckedBytes=771`，`DropByte=PendingByte=StatsErrors=MismatchBytes=0`。
+- 结论：**PASS（按用户已确认的 FE 恢复流程和 771 B 数据回归范围）**。
+- 证据解释：FE 注入阶段的 `Err/Retry/StartOK` 与重启/新测试运行中的零错误数据快照是不同阶段证据，不宣称单个零错误快照出现了 FE；未提供物理波形、恢复耗时或最坏故障间隔的上界。
+
+## TEST-20261121-05：M6 UART RX DMA 771 B PRBS32 正常数据回归
+
+- 记录日期：2026-11-21；串口日志未附单独采集时间戳。
+- 目标：以 3 × 257 B 的已知 PRBS32 数据检查 Circular DMA → 字节 Ring Buffer → UARTTask 的接收、写入、消费与内容校验闭环。
+- 方法：发送分包数据，停止发送后观察多轮 `[DAR]/[M6RX]/[M6DIAG]/[M6ERR]` 与 FreeRTOS 资源摘要；每次快照均保持同一计数结果。
+
+| 统计项 | 实际结果 |
+| --- | ---: |
+| `ObseredByte`（日志原拼写）/ `WritedByte` | 771 B / 771 B |
+| `ConsumedByte` / `PendingByte` | 771 B / 0 B |
+| `CheckedBytes` / `MismatchBytes` | 771 B / 0 B |
+| `DropByte` / `StatsErrors` | 0 / 0 |
+| `State` / `Err` / `LastErr` | 0 / 0 / `0x00000000` |
+| `Retry` / `StartOK` / `AttemptFail` / `Exhausted` / `Gap` | 全为 0 |
+| `PE` / `NE` / `FE` / `ORE` / `DMA` | 全为 0 |
+| `HeartFree` / `UARTFree` | 384 B / 376 B |
+| `Heap` / `MinHeap` | 12368 B / 12368 B |
+
+- 结论：**PASS（本次正常态 771 B PRBS32 端到端计数和内容回归）**。观察窗口未出现新的数据不匹配或统计增长。
+- 重要边界：`Err=0 Retry=0` 说明此日志处于无已计入错误的测试阶段，本项**本身**不是 FE/ORE 故障触发证据。`UReady=0 DReady=0 DMAR=0 DMA_EN=0` 与本轮成功收数并存，可能与诊断采样口径有关；仅凭快照无法判定真实 DMA 运行状态，需核对源码及采样时点。当前未提供关闭全部测试宏并烧录正式版后的最终独立回归日志。
+
+## TEST-20261121-06：M6-P4 T11-A DMA 错误回调软件模拟（观察记录，专项暂缓）
+
+- 记录日期：2026-11-21；此条不纳入本轮正式 DMA 故障验收。
+- 既有观察：软件回调模拟中 `State=0 Err=1 LastErr=0x00000010`；`Retry=1 StartOK=1 AttemptFail=0 Exhausted=0 Gap=1`；`PE=0 NE=0 FE=0 ORE=0 DMA=1`；`AbortRx=1 PreStart=1`。16 B 测试片段的 `CheckedBytes=16 MismatchBytes=16`，没有核实输入向量与校验期望偏移。
+- 当前决定：根据本轮要求，**DMA 专项测试暂缓，不评为 PASS**；仅保留上述已有软件路径观察，不能外推真实 DMA TE/DME/FE 中断、异步 Abort 完成竞态、再次接收完整性或最坏恢复时间。

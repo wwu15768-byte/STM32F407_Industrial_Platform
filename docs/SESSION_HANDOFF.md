@@ -1,21 +1,32 @@
 > 当前会话快照；会话切换前整体更新。
-> 更新时间：2026-11-12，M6-P3 板级验收和代码推送完成。
+> 更新时间：2026-11-21，M6-P4 已测故障恢复分支与 771 B 数据回归资料同步；正式构建与 Git 收尾尚待核实。
 > 下文 M0～M4 段落保留对应阶段的历史实验条件。当前固件以本文首尾状态为准。
 
 ## 当前 Milestone
 
-M6：USART2 DMA + IDLE 不定长接收。P3 使用 DMA1 Stream5 Channel4 Circular、256 B DMA 接收区和有效 1023 B 的独立软件字节环。HT/TC/IDLE 回调按 DMA 剩余传输数和旧游标搬运新增区间，UARTTask 分块消费并校验测试序列。环满时拒绝放不下的新字节并累计 `DropBytes`。
+M6：USART2 DMA + IDLE 不定长接收，P3 已稳定建立 Circular DMA 256 B + 独立软件字节环（1024 格，有效 1023 B），HT/TC/IDLE 按新旧 DMA 游标差分搬运，UARTTask 分块消费并校验。P4 已完成 T08-A/B、T09 ORE、T10-A NE 软件模拟等恢复控制路径，以及用户确认的 FE 恢复/771 B 回归；真实 NE 硬件注入未测，DMA 故障专项本轮暂缓。尚未取得最新 P4 正式配置构建和提交证据。
 
 ## 当前 Branch 与 Git 基线
 
-- M5 PR #6 合并点 `30b0072`。当前 `feature/m6-baseline` 含 M6-P2 功能 `7d6b3dd`、文档 `bd6d2cf` 与 M6-P3 功能 `3136142`。
-- 2026-11-12 通过 `git ls-remote` 验证 `refs/heads/feature/m6-baseline` 与本地 HEAD 均为 `31361427e017e3c053dc1c087fa2763e96eb3cd2`。代码提交前关闭 `M6_OVERFLOW_TEST`，Debug 构建和暂存空白检查通过。
+- M5 PR #6 合并点 `30b0072`。截至已核实的 M6-P3 基线，分支为 `feature/m6-baseline`，P2 功能 `7d6b3dd`、文档 `bd6d2cf`、P3 功能 `3136142`。
+- 2026-11-12 通过 `git ls-remote` 验证 `refs/heads/feature/m6-baseline` 与当时本地 HEAD 均为 `31361427e017e3c053dc1c087fa2763e96eb3cd2`。P3 提交前关闭 `M6_OVERFLOW_TEST`，Debug 构建和暂存空白检查通过。
+- **注意：尚未提供当前 P4 HEAD / diff / push；以上是已确认的历史基线，不是 P4 的最新提交。**
 
 ## 2026-11-12 M6-P3 验证快照
 
 - 257 B 跨界两次累计 514 B。原始 10/50 KiB 长流完整消费，`MismatchBytes=0`。50 KiB 第 65 字节翻转用例 `MismatchBytes=1`。
 - 2048 B 溢出注入保留前 1023 B，拒绝 1025 B。排空后原序列校验通过，同次运行恢复 257 B 成功。具体快照见 `TEST-20261112-01`～`TEST-20261112-03`。
 - 历史 P2 Clean Build 和 1/4/63/64 B 短包复核通过。P2 8/64 格队列对照与计数限制保留在 `TEST-20261101-01`～`TEST-20261101-04`。
+
+## 2026-11-21 M6-P4 阶段快照
+
+- T08-A 模拟两次启动失败、第三次成功：`State=0 Retry=3 StartOK=1 AttemptFail=2 Exhausted=0`。T08-B 模拟三次失败耗尽：`State=4 Retry=3 StartOK=0 AttemptFail=3 Exhausted=1`。
+- T09 ORE 触发日志：`LastErr=0x00000008 ORE=1 Retry=1 StartOK=1 State=0`，但同次故障轮 `ObservedByte=0`；这是控制路径，不是逐字节回归证据。
+- T10-A NE 软件模拟：`LastErr=0x00000002 NE=1 Retry=1 StartOK=1 State=0`；16 B 的 `MismatchBytes=16` 尚未核实发送向量和校验期望偏移，不当作接收损坏结论。无真实 NE 硬件测试要求。
+- FE 故障恢复用户确认完成。此前故障统计曾为 `Err=3 LastErr=0x00000004 Retry=3 StartOK=3 Exhausted=0 Gap=3`；恢复后 PRBS32 数据回归按用户确认通过，故障阶段和数据阶段必须分开说明。
+- 独立 3 × 257 B 正常回归：`Observed=Writed=Consumed=Checked=771`，`Drop=Pending=StatsErrors=Mismatch=0`；重复快照一致。资源 `HeartFree=384 B UARTFree=376 B Heap=MinHeap=12368 B`。该轮 `Err=0`，不是故障注入发生时的日志。
+- T11-A 曾有 DMA 错误回调**软件模拟**观察，`AbortRx=1`；但用户明确本轮忽略 DMA 测试，不得记为真实 DMA 错误专项通过。
+- 未核实：最新正式注入宏配置、P4 Clean Build / 烧录 / 最终独立回归、诊断位 `UReady/DReady/DMAR/DMA_EN` 的采样时点、P4 Git 状态。详见 `TEST-20261121-01`～`06`。
 
 ## 已完成并验证的内容
 
@@ -683,25 +694,29 @@ overflow_count
 - 覆盖旧数据策略尚未实现。
 - 长期生产速率高于消费速率时，Buffer 最终仍可能溢出。
 
-## 当前明确未实现
+## 当前明确未实现 / 未覆盖
 
-- 真实 UART FE/ORE/NE 或 DMA 错误注入，以及接收中止后的自动恢复。P3 已通过软件环溢出后的消费恢复。
-- 最坏中断延迟、DMA 数据覆盖时限和长时间高负载测试。
-- USART2 TX DMA、正式协议解析及后续里程碑。
+- 真实 NE 硬件故障测试未执行；真实 DMA TE/DME/FE、异步 Abort 竞态与恢复后内容回归按用户要求暂缓。T11-A 软件模拟不视为 DMA 硬件路径验收。
+- 最坏中断/回调/搬运/故障恢复时延、DMA 整圈覆盖边界和长期高负载验证未完成。
+- USART2 TX DMA、正式协议解析及后续里程碑未验收。
+- P4 正式配置最终 Clean Build、烧录及最新 Git 归档证据未提供。
 
 ## 已确认的重要约束
 
-- STM32F407VGT6，HAL + CMSIS-RTOS2。USART2 PD5/PD6、115200/8N1，DMA1 Stream5 Channel4。TIM6 为 HAL Timebase，SysTick 为 RTOS Tick。
-- USART2 和 DMA RX IRQ 的抢占优先级均为 5。软件环由回调发布原子 `head`，UARTTask 发布原子 `tail`。统计快照使用短任务临界区，日志在任务上下文输出。
-- `DropBytes` 记录软件环拒绝的字节量。DMA 整圈覆盖风险和物理 UART/DMA 错误需分别验证。M4 的 `uint32_t` 环保留为历史实验模块。
-- 当前 UARTTask 每轮最多消费 4 × 64 B，`osDelay(10U)`。代码含固定伪随机测试序列的内容比对，`M6_OVERFLOW_TEST` 仅控制暂停消费者，提交值为 `0U`。
+- STM32F407VGT6，HAL + CMSIS-RTOS2；USART2 PD5/PD6、115200/8N1，DMA1 Stream5 Channel4；TIM6 为 HAL Timebase、SysTick 为 RTOS Tick。
+- 已知 P3 RX 为 256 B Circular DMA + 有效 1023 B 字节环；USART2/DMA RX IRQ 抢占优先级均为 5。M4 的 `uint32_t` SPSC Ring Buffer 是历史独立模块。
+- `DropByte` 记录软件环实际拒绝的字节量，与 UART `PE/NE/FE/ORE` 及 DMA 错误分离。测试 PRBS32 使用种子 `0x13579BDF` 的 xorshift32 校验（历史 P3 结构）。
+- 已知 P3 UARTTask 每轮最多消费 4 × 64 B，`osDelay(10U)`；M6-P4 当前源码不在本次文档包中，恢复实现细节须以最新 HEAD 核实，不能由日志臆造。
+- 注入宏必须在正式固件构建前核对并关闭；P3 的 `M6_OVERFLOW_TEST=0U` 是历史已确认状态，不能据此认定全部 P4 故障注入开关已关闭。
 
 ## 当前最新验证情况
 
-- P3 代码已推送 `3136142`，只含 `.ioc`、`Src/usart.c` 和 `Src/freertos.c`。
-- 溢出恢复最终 `Observed=2305`、`Buffered=Consumed=CheckedBytes=1280`、`DropBytes=1025`、`Pending=MismatchBytes=StatsErrors=0`。
-- 内容校验与溢出恢复日志中 UARTFree 分别为 480 B 和 456 B。HeartFree 384 B，Heap/MinHeap 12368 B。
+- P3：长流 10/50 KiB 内容校验、溢出 2048 B 丢弃 1025 B 和恢复 257 B 已通过，代码提交 `3136142` 已推送（截至 2026-11-12 的核验）。
+- P4：T08-A/B 状态分支、T09 ORE 控制路径、T10-A NE 软件分类/恢复路径；FE 恢复及后续数据回归按用户确认完成。
+- 最新正常 771 B 回归：`ObservedByte=WritedByte=ConsumedByte=CheckedBytes=771`；`DropByte=PendingByte=StatsErrors=MismatchBytes=0`，重复多轮一致；正常轮 `State=0 Err=0 Retry=0`。
+- 资源：HeartFree 384 B、UARTFree 376 B、Heap/MinHeap 12368 B；恢复/状态诊断中的 `UReady=0 DReady=0 DMAR=0 DMA_EN=0` 需要结合采样代码解释，不直接作为停机证据。
+- 测试详情：`TEST-20261121-01`～`TEST-20261121-06`；阶段决策：`DEC-20261121-01`；知识边界：`KG-015`、`KG-016`。
 
 ## 下一步最合理的一个任务
 
-审阅并归档 M6-P3 文档。随后进入 M6-P4，先确定真实 UART/DMA 异常的注入条件和恢复验收标准，再验证故障后重新接收已知序列。
+以正式固件关闭为主线：先审查最新 P4 注入宏和接收恢复状态，再执行 Debug Clean Build、烧录及 771 B PRBS32 回归，最后检查/提交代码与文档 Git Diff。DMA 专项继续暂缓，真实 NE 测试和最坏响应时延保留未覆盖声明；无源码和终端输出时不要填新的提交哈希或宣布 M6 最终完成。

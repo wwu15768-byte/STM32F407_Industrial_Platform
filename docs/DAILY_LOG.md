@@ -2094,3 +2094,64 @@ MinHeap=4568 B
 ## 明天下一步
 
 归档本阶段文档，按 M6-P4 设计并验证 UART/DMA 硬件异常后的接收恢复，补充回调时延证据。
+
+
+# 2026-11-21
+
+> 本条为 M6-P4 验收资料同步日；故障注入及原始串口日志的实际采集日期未逐项提供，不反推它们全部发生于今日。
+
+## 今日计划
+
+- 汇总 M6 UART RX DMA 错误恢复分支、FE/ORE/NE 测试和 PRBS32 回归证据。
+- 明确 DMA 专项暂缓边界，并同步阶段状态、测试、知识缺口与交接资料。
+
+## 实际完成
+
+- 整理 T08-A：故障恢复模拟连续两次启动失败后第三次成功，`Retry=3 StartOK=1 AttemptFail=2 Exhausted=0`，最终 `State=0`；T08-B：三次启动均失败，`Retry=3 StartOK=0 AttemptFail=3 Exhausted=1`，最终 `State=4`。
+- 整理 T09 ORE：`LastErr=0x00000008`、`ORE=1`，一次恢复尝试成功，`Retry=1 StartOK=1 AttemptFail=0 Exhausted=0`，最终 `State=0`。该轮故障触发日志 `ObservedByte=0`，不能单独充当恢复后字节完整性证明。
+- 整理 T10-A NE 软件模拟：`LastErr=0x00000002`、`NE=1`，一次恢复尝试成功，最终 `State=0`。模拟测试的 16 B 片段 `CheckedBytes=16 MismatchBytes=16`，原始文件/校验状态未在本轮资料中核实，不能据此判定恢复链路数据损坏或通过内容校验。
+- 整理 FE 恢复：用户确认 FE 恢复及恢复后数据测试完成；此前 FE 日志曾显示 `Err=3 LastErr=0x00000004 Retry=3 StartOK=3 AttemptFail=0 Exhausted=0 Gap=3`。FE 故障计数与随后数据完整性回归应分别保留证据。
+- 整理最新独立 771 B PRBS32 回归：`ObservedByte=WritedByte=ConsumedByte=CheckedBytes=771`，`DropByte=PendingByte=StatsErrors=MismatchBytes=0`；多轮快照保持一致，正常状态 `State=0 Err=0 LastErr=0`。这一轮的零错误统计不能当作 FE/ORE 故障注入日志。
+- 本次 771 B 日志可见 `HeartFree=384 B UARTFree=376 B Heap=MinHeap=12368 B`，无观测窗口内的计数或堆余量变化。
+- DMA T11-A 回调模拟此前有分类及恢复路径日志，但按本轮要求暂时忽略 DMA 专项，不将软件模拟解释为真实 DMA 硬件故障覆盖。
+
+## 验收情况
+
+- **PASS**：T08-A 两次失败后成功、T08-B 三次失败耗尽，均与预期状态分支一致。
+- **PASS（已测错误控制路径）**：ORE 分类与恢复启动；NE 软件模拟分类与恢复启动。
+- **PASS（用户确认，须保留分段证据）**：FE 错误后恢复及数据回归；此前故障日志与数据校验日志不应混作同一快照。
+- **PASS（正常数据回归）**：771 B PRBS32 全量写入、消费并逐字节匹配，无软件环丢弃、积压或统计错误。
+- **暂缓**：DMA 真实故障与异步 Abort 竞态专项；真实 NE 硬件注入尚未验证。
+
+## 未完成
+
+- 关闭/核对所有临时注入宏的正式固件配置、最终 Clean Build、烧录正式固件后的独立 771 B 回归，尚无本轮完整命令/日志证据。
+- M6-P4 当前改动的 Git 差异、提交与远程推送状态未提供；不能沿用 P3 的 `3136142` 冒充最新 P4 提交。
+- DMA 最坏响应/数据覆盖时延、真实 DMA 故障路径及诊断字段采样语义尚待验证。
+
+## 今日 Bug
+
+- 本轮没有足够证据确认新的代码根因型缺陷，不新增 `ERROR_LOG.md` 错误编号。
+- 正常 771 B 快照同时显示 `State=0` 与 `UReady=0 DReady=0 DMAR=0 DMA_EN=0`；这些诊断值是否为恢复期/非实时快照尚不确定，记录为待核实问题，不能据此直接宣称 DMA 关闭。
+
+## 今日学习
+
+- 恢复控制路径的 `Retry/StartOK/AttemptFail/Exhausted/State` 与数据层 `Observed/Writed/Consumed/Checked/Drop/Mismatch` 必须分开验收。
+- 软件模拟错误分类不等于真实物理故障覆盖；无数据错误的常态快照也不能替代故障发生时的证据。
+- PRBS 校验发生不匹配前，需要确认发送向量、复位状态和期望序列偏移，不能仅凭 16 B 的不匹配数推断接收字节出错。
+
+## 尚未理解
+
+- DMA 错误、异步中止竞态与真实 NE 注入条件（参见 `KG-015`）。
+- 恢复路径相关诊断寄存器/状态的采样时间，以及恢复时 DMA 覆盖与最坏响应时间（参见 `KG-016`）。
+
+## Git
+
+- 已知历史基线：`feature/m6-baseline`，M6-P3 推送的代码提交 `3136142`（截至 2026-11-12 的确认）。
+- 未提供当前 `git status`、P4 `git log` 或 `git push` 结果，本次仅归档文档；不填写新的固件提交哈希。
+
+## 明天下一步
+
+1. 审核并关闭临时故障注入配置；执行正式 Debug Clean Build、烧录及 771 B PRBS32 独立回归。
+2. 对照最新源码核实诊断快照语义，再确认 M6 本阶段是否达到关闭条件。
+3. 检查文档和代码 Git Diff，按实际结果分别提交与推送；DMA/真实 NE 的未覆盖范围保留在状态文档中。
