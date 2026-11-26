@@ -2155,3 +2155,65 @@ MinHeap=4568 B
 1. 审核并关闭临时故障注入配置；执行正式 Debug Clean Build、烧录及 771 B PRBS32 独立回归。
 2. 对照最新源码核实诊断快照语义，再确认 M6 本阶段是否达到关闭条件。
 3. 检查文档和代码 Git Diff，按实际结果分别提交与推送；DMA/真实 NE 的未覆盖范围保留在状态文档中。
+
+
+# 2026-11-26
+
+## 今日计划
+
+- 核对 M6 PR #7 合入 `main` 与切出 `feature/m7-baseline` 后的真实项目状态与文档缺口。
+- 完成 M7-P0 运行时清理、将字节环抽离为可复用模块，并收敛串口杂乱输出。
+- 完成 Clean Build、实板回归测试，并同步 `README.md` 与 `docs/`。
+
+## 实际完成
+
+- 核查 Git 状态：`feature/m6-baseline`（代码 `8bc0a8e`、文档 `e1461b6`）已通过 PR #7（`08d5b64`）合入 `main`，本地与远端一致，当前已切到 `feature/m7-baseline`。
+- 源码核实 `8bc0a8e` 遗留疑问：三个临时测试/注入宏均为 `0U`；正常 771 B 日志中 `UReady=DReady=DMAR=DMA_EN=0` 是因为该 4 项诊断变量仅在 `M6_UART_RecoverRx()` 触发恢复时赋值，常态无错运行时保持初值 `0`，并非 DMA 停机。
+- 建立清理前本地保护标签 `m7-pre-cleanup-20261121`（指向 `08d5b64`）。
+- 完成 M7-P0 代码清理与模块化（`88c3712`）：
+  - 删除不再使用的 M4 死文件 `Inc/m4_ipc.h`、`Src/m4_ipc.c`、`Inc/m4_isr.h`、`Src/m4_isr.c` 与 `Src/main.c` 中的 TIM7 空回调；将 `Src/ring_buffer.c` 移入 `CMakeLists.txt` 的 `if(M4_ENABLE_SPSC_TEST)` 条件块。
+  - 新增依赖注入式字节环模块 `Inc/byte_ring_buffer.h` / `Src/byte_ring_buffer.c`（调用方传入静态数组与容量，C11 `_Atomic` acquire/release，循环回绕避免 ISR 内除法），供 USART2 与后续 M7 RS485 共用。
+  - 清理 `Src/freertos.c` 中的 M6 临时测试/注入代码、P2 死变量、硬编码 PRBS32 校验器与 P4 内部寄存器诊断变量，保留 M5 ADC 采集与 M6 Circular DMA + 字节环 + 非阻塞错误恢复状态机。
+  - 串口日志由约 306 行/30 秒收敛为每 5 秒 4 行摘要（`[SYS]` 三任务 StackFree、`[SYS]` Heap/MinHeap、`[ADC]` V/Late/Err、`[RX]` Obs/Con/Drop/State/Err）+ 数据到达单轮汇总 `[RX] recv=... B` + 异常事件触发 `[M6ERR]`。
+- 执行 Debug Clean Build（45/45，0 warning / 0 error）：RAM `23000 B (17.55%)`、CCMRAM `0 B`、FLASH `42448 B (4.05%)`。
+- 完成板级回归（`TEST-20261126-01`）：PA1 电位器电压变化 `0～2060 mV`（`Late=0 Err=0`）、USART2 短包 `16 B` / `8 B` 正常消费（`Obs==Con`，`Drop=0 State=0 Err=0`）、NRST ×3 全部恢复，`Heart=384 B`、`UART=328 B`、`Acq=816 B`、`Heap=MinHeap=12368 B`。
+- 同步 `README.md` 与 `docs/` 全部项目管理文档，补齐 M4～M6 已合并历史与 M7-P0 最新实测数据。
+
+## 验收情况
+
+- M7-P0 Clean Build（45/45，0 warning / 0 error）：PASS。
+- 日志收敛（5 秒 4 行摘要 + 单轮 `[RX] recv=... B`）：PASS。
+- M5 ADC 电位器采样与超时/错误统计：PASS（`0～2060 mV`，`Late=0 Err=0`）。
+- M6 USART2 DMA + `ByteRingBuffer` 短包接收：PASS（`16 B` / `8 B`，`Drop=0 Err=0`）。
+- NRST ×3 恢复：PASS。
+- 未复测项（不虚报）：本轮未重跑 257 B 跨界长流、软件环溢出或 Power-cycle ×3。
+
+## 未完成
+
+- 将 `feature/m7-baseline` 上的 M7-P0 代码与文档提交推送至远端。
+- 尚未进入 M7-P1 RS485 硬件与外设配置确认。
+
+## 今日 Bug
+
+- 无新增固件 Bug。
+- 观察并解释了一个正常现象：每次启动后首条摘要显示 `UART=640 B`，从第二条起稳定为 `UART=328 B`，原因是首次采样 `osThreadGetStackSpace()` 发生在第一轮 `LOG_INFO()` 调用 `vsnprintf` 之前，进入 `vsnprintf` 后峰值栈消耗约 312 B，随后稳定不再下降。
+
+## 今日学习
+
+- 通过 `Init(rb, storage, capacity)` 由调用方注入静态数组指针与长度属于依赖注入（降低模块耦合、支持多实例复用），但调用方必须保证底层数组具有静态/全局生命周期，且 `capacity >= 2`。
+- 任务栈高水位线只有在最深调用路径（如 `vsnprintf` 日志格式化）实际执行过之后才反映真实峰值。
+
+## 尚未理解
+
+- RS485 半双工 DE/RE 方向切换的 `TXE` 与 `TC` 精确硬件时序及实际总线波形（进入 M7 后学习与验证）。
+
+## Git
+
+- Branch：`feature/m7-baseline`（基于 `main` PR #7 `08d5b64`）。
+- 保护标签：`m7-pre-cleanup-20261121`（指向 `08d5b64`）。
+- 代码提交：`88c3712`（`refactor: modularize byte ring buffer and simplify runtime logging`）。
+- 文档同步提交：待本轮检查后创建。
+
+## 明天下一步
+
+推送 M7-P0 提交到远端后，正式开始 M7-P1：核对 RS485 收发器硬件、独立 UART 外设与 DE/RE 引脚资源，再设计最小半双工收发切换实验。

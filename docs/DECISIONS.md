@@ -291,3 +291,16 @@
 - 验证依据：T08-A/B 两条重试分支分别回到 `State=0` 与进入 `State=4`；T09 ORE 错误分类及一次成功重启；T10-A NE 软件模拟分类与恢复；FE 故障阶段及后续 771 B PRBS32 数据回归按用户确认完成；正常态独立 771 B 校验 `Mismatch=Drop=0`。见 `TEST-20261121-01`～`TEST-20261121-05`。
 - 范围控制：真实 NE 硬件注入不作为本轮已完成证据；按用户本轮要求暂缓 DMA 真实故障/异步 Abort 专项，T11-A 软件回调模拟仅归档观察、不作为 DMA 硬件路径 PASS。UART TX DMA、协议任务与最坏中断/恢复时延仍未验收。
 - 影响：M6-P4 状态记为“UART 已测恢复分支通过、专项覆盖未完成”，而不是“全部硬件异常恢复完成”。正式固件关闭注入宏、Clean Build、烧录与最终独立回归需在 Git 收尾前按实际结果记录；尚无本轮完整证据，不能预填完成状态或提交哈希。
+
+
+## DEC-20261126-01：M7-P0 抽离依赖注入式 ByteRingBuffer 并收敛运行时日志
+
+- 状态：已接受并完成板级回归，代码提交 `88c3712`（`feature/m7-baseline`，清理前保护标签 `m7-pre-cleanup-20261121`）。
+- 决策：
+  1. 从 CubeMX 管理的 `Src/freertos.c` 中抽离纯字节流环形缓冲为独立模块 `Inc/byte_ring_buffer.h` / `Src/byte_ring_buffer.c`；采用调用方注入静态数组指针与容量的 `ByteRingBuffer_Init(rb, storage, capacity)` 设计（`capacity >= 2`，无动态内存，C11 `_Atomic` acquire/release），与历史 M4 的 `uint32_t` `ring_buffer` 模块清晰解耦。
+  2. 删除不再调用的历史 M4 空壳文件 `m4_ipc.*` / `m4_isr.*` 及 `main.c` 中 TIM7 空回调；将 `Src/ring_buffer.c` 移入 `CMakeLists.txt` 的 `if(M4_ENABLE_SPSC_TEST)` 条件块，保持 M4 SPSC 测试可复现但不进入默认构建。
+  3. 删除 `Src/freertos.c` 中的 M6-P2 死变量、M6-P3/P4 临时测试/故障注入宏、硬编码 PRBS32 校验器与 P4 内部寄存器诊断变量；保留 M5 ADC1+TIM2+DMA2 采集与 M6 USART2 Circular DMA + 非阻塞错误分类/恢复状态机。
+  4. 将原约 306 行/30 秒的刷屏输出收敛为：每 5 秒 4 行紧凑摘要（`[SYS]` 三任务 StackFree、`[SYS]` Heap/MinHeap、`[ADC]` V/Late/Err、`[RX]` Obs/Con/Drop/State/Err）、收到数据时单轮汇总 1 行 `[RX] recv=... B`，以及错误或恢复状态切换时事件触发 `[M6ERR]`。
+- 原因：避免 CubeMX 管理的 `Src/freertos.c` 持续膨胀，提前为 M7 RS485 提供可复用的多实例字节环，并恢复串口日志的工程可读性与 M5/M6 状态可见性；同时暂不顺手大拆整套 M6 HAL 回调与 M5 ADC，严格控制改动边界。
+- 验证：Debug Clean Build 45/45（RAM `23000 B` / FLASH `42448 B`）0 warning / 0 error；板级验证 PA1 电位器（`0～2060 mV`，`Late=0 Err=0`）、USART2 短包接收（`16 B` / `8 B`，`Drop=0 Err=0`）与 NRST ×3 全部通过（见 `TEST-20261126-01`）。
+- 影响/边界：调用方必须保证传给 `ByteRingBuffer_Init()` 的存储区具有静态/全局生命周期，并在启动对应 DMA/ISR 前完成初始化；本轮未重跑 257 B 跨界长流或 Power-cycle ×3，后续 M7/M8 联调按需补充。

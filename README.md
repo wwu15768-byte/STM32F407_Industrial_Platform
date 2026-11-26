@@ -2,7 +2,7 @@
 
 本项目以 STM32F407VGT6 为核心，逐步实现一个基于 FreeRTOS 的工业实时数据采集与多总线通信平台，并补充 MCU 工程中常见的数据采集、CAN、Bootloader、故障诊断和系统可靠性能力。同时将项目作为嵌入式软件工程实践载体，训练驱动开发、RTOS、通信、测试、调试、Git 和工程文档能力。本仓库采用 STM32 HAL、CMake、Ninja 和 Arm GNU Toolchain (arm-none-eabi)，逐步建立可复现、可验证、便于维护的固件工程。
 
-当前已完成 **M3：线程安全、可裁剪的调试基础设施**，准备正式进入 **M4：RTOS 通信、同步和数据缓冲**。当前工程已经具备可重复构建、烧录和真实目标板运行能力，并完成 FreeRTOS 调度基础、运行时资源观测、统一 UART Logger、日志等级、编译期裁剪、Mutex 线程安全输出、NRST 和完全断电重新上电验证。Queue、Task Notification、Binary Semaphore 和 Ring Buffer 尚未开始实现。
+当前已完成 **M0～M6** 并通过 PR #7（`08d5b64`）合入 `main`，在 `feature/m7-baseline` 上完成了 **M7-P0 运行时清理与可复用字节环模块化**（`88c3712`），准备正式进入 **M7：RS485 半双工通信**。当前固件已具备可重复构建、烧录与真实板级运行能力，并持续运行 FreeRTOS 三任务基线、线程安全同步 UART Logger、50 Hz ADC1+TIM2+DMA2 双半区采集，以及 USART2 Circular DMA + 独立字节环 + 非阻塞错误恢复链路。真实 NE 硬件注入、真实 DMA 硬件故障专项、UART TX DMA、RS485、Modbus、CAN、Bootloader 与 Watchdog 尚未实现或暂缓。
 
 ## 硬件与软件约束
 
@@ -82,10 +82,10 @@ CubeMX 工程输入、HAL/CMSIS、FreeRTOS、启动文件、链接脚本、`.ioc
 - [x] M1：建立可下载、可运行、可观测、可重复启动的 STM32F407VGT6 裸机 Known Good Baseline。
 - [x] M2：完成 FreeRTOS 最小系统、CMSIS-RTOS2、单任务、双任务、优先级抢占、同优先级时间片、Task Stack 和 FreeRTOS Heap 验证。
 - [x] M3：建立并验证线程安全、可裁剪的同步 UART 调试基础设施。
-- [ ] **M4（当前）**：建立 Queue、Task Notification、Binary Semaphore、Mutex 和 Ring Buffer 基础。
-- [ ] M5：建立 ADC + Timer + DMA 实时数据采集子系统。
-- [ ] M6：实现 UART DMA + IDLE 不定长通信。
-- [ ] M7：实现 RS485 半双工通信。
+- [x] M4：完成 Queue、Thread Flags、Binary Semaphore、Mutex、TIM7 ISR 通知与 Task↔Task SPSC Ring Buffer 验证（PR #5 `e793039`）。
+- [x] M5：建立并验证 ADC1 + TIM2 TRGO (50 Hz) + DMA2 Circular 实时数据采集子系统（PR #6 `30b0072`）。
+- [x] M6：建立并验证 USART2 RX Circular DMA + 字节 Ring Buffer + 非阻塞 UART 错误恢复基线（PR #7 `08d5b64`；真实 NE 硬件注入、真实 DMA 故障专项与 UART TX DMA 暂缓/未覆盖）。
+- [ ] **M7（当前）**：实现 RS485 半双工通信（已完成 M7-P0 运行时清理与 `byte_ring_buffer` 模块化）。
 - [ ] M8：实现基础 Modbus RTU 通信。
 - [ ] M9：建立统一数据模型。
 - [ ] M10：建立 bxCAN 基础通信与实时收发模型。
@@ -97,29 +97,28 @@ CubeMX 工程输入、HAL/CMSIS、FreeRTOS、启动文件、链接脚本、`.ioc
 
 ## 当前构建状态
 
-当前 M3 Final Baseline 已通过 CMake + Ninja + GNU Arm GCC 构建，并成功生成 ELF/HEX/BIN 固件。
+当前 M7-P0 清理基线（`88c3712`）已通过 CMake + Ninja + GNU Arm GCC Clean Build（45/45，0 warning / 0 error），并成功生成 ELF/HEX/BIN 固件。
 
-最近一次最终 baseline 构建资源占用：
+最近一次 Debug Clean Build 资源占用：
 
-- RAM：21056 B / 128 KB，16.06%
-- FLASH：27424 B / 1 MB，2.62%
+- RAM：23000 B / 128 KB，17.55%
+- CCMRAM：0 B / 64 KB，0.00%
+- FLASH：42448 B / 1 MB，4.05%（`text=42344 B`、`data=96 B`、`bss=22904 B`）
 
-当前真实板级 baseline：
+当前真实板级运行基线（3 个应用任务 + 2 个独立基础模块 `debug_log`、`byte_ring_buffer`）：
 
-- HeartBeatTask：`osPriorityNormal`，512 B Stack，`osDelay(500U)`。
-- UARTTask：`osPriorityNormal`，1024 B Stack，`osDelay(1000U)`。
-- HeartBeatTask 历史最小剩余 Stack：约 384 B。
-- UARTTask 历史最小剩余 Stack：约 512 B。
-- FreeRTOS Current Free Heap：13504 B。
-- FreeRTOS Minimum Ever Free Heap：13504 B。
-- DEBUG / INFO / WARN / ERROR 编译期过滤：通过。
-- 双任务共享 UART Mutex 并发日志压力测试：通过当前测试条件。
-- NRST ×3：通过。
-- 完全断电重新上电 ×3：通过。
+- `HeartBeatTask`：`osPriorityNormal`，512 B Stack，`osDelay(500U)`，历史最小剩余 Stack：`384 B`。
+- `UARTTask`：`osPriorityNormal`，1024 B Stack，`osDelay(10U)`，首次格式化日志后历史最小剩余 Stack 稳定为 `328 B`；负责消费 USART2 字节环、执行非阻塞 RX 异常恢复状态机，并每 5 秒输出 4 行系统/ADC/RX 摘要（收到数据时另打印 `[RX] recv=... B`，发生错误或恢复状态切换时事件触发 `[M6ERR]`）。
+- `AcquisitionTask`：`osPriorityAboveNormal`，1024 B Stack，`osThreadFlagsWait`，历史最小剩余 Stack：`816 B`；处理 ADC1_IN1 (PA1) + TIM2 TRGO (50 Hz) + DMA2 Stream0 Circular (20×`uint16_t`) 半/全缓冲通知并计算 10 点平均电压。
+- FreeRTOS Current Free Heap：`12368 B`；Minimum Ever Free Heap：`12368 B`。
+- M7-P0 回归验证：PA1 电位器电压变化（`0～2060 mV`，`Late=0 Err=0`）、USART2 短包接收（`16 B` / `8 B`，`Drop=0 Err=0`）、NRST ×3 恢复均通过（详见 [`TEST_RECORD.md`](docs/TEST_RECORD.md) 的 `TEST-20261126-01`）。
 
-M3 最终功能 checkpoint 为 `4701c62`：`feat: route FreeRTOS runtime output through debug logger`；M3 文档关闭 checkpoint 为 `75523b6`：`docs: close M3 and prepare M4 handoff`。
+关键里程碑 checkpoint：
 
-当前没有实现 ISR-safe logging、异步日志、HardFault Diagnostic、ADC DMA、UART DMA、RS485、Modbus、CAN、Bootloader 或 Watchdog；这些能力按 [`ROADMAP.md`](docs/ROADMAP.md) 的依赖顺序逐阶段实现。
+- M6 合并基线（`main`）：`08d5b64`（`Merge pull request #7 from wwu15768-byte/feature/m6-baseline`，含代码 `8bc0a8e` 与文档 `e1461b6`）。
+- M7-P0 清理基线（`feature/m7-baseline`）：`88c3712`（`refactor: modularize byte ring buffer and simplify runtime logging`，清理前保护标签 `m7-pre-cleanup-20261121`）。
+
+当前未实现或暂缓的能力包括：真实 NE 硬件注入、真实 DMA 硬件故障/异步 Abort 专项、UART TX DMA、RS485、Modbus、CAN、Bootloader、Watchdog 与 HardFault Diagnostic；这些能力按 [`ROADMAP.md`](docs/ROADMAP.md) 的依赖顺序逐阶段实现。
 
 ## 文档
 

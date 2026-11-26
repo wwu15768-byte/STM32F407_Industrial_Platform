@@ -2272,3 +2272,43 @@ Heap=3432 B        MinHeap=3432 B
 - 记录日期：2026-11-21；此条不纳入本轮正式 DMA 故障验收。
 - 既有观察：软件回调模拟中 `State=0 Err=1 LastErr=0x00000010`；`Retry=1 StartOK=1 AttemptFail=0 Exhausted=0 Gap=1`；`PE=0 NE=0 FE=0 ORE=0 DMA=1`；`AbortRx=1 PreStart=1`。16 B 测试片段的 `CheckedBytes=16 MismatchBytes=16`，没有核实输入向量与校验期望偏移。
 - 当前决定：根据本轮要求，**DMA 专项测试暂缓，不评为 PASS**；仅保留上述已有软件路径观察，不能外推真实 DMA TE/DME/FE 中断、异步 Abort 完成竞态、再次接收完整性或最坏恢复时间。
+
+
+## TEST-20261126-01：M7-P0 运行时清理、ByteRingBuffer 模块化与基础功能回归
+
+- 记录日期：2026-11-26。
+- 目标：验证从 `Src/freertos.c` 抽离 `byte_ring_buffer.c/.h`、移除 M6 临时测试/故障注入代码与 M4 死文件、收敛日志输出后，M1～M6 已建成的核心运行链路（LED、FreeRTOS 三任务、DebugLog、M5 ADC DMA、M6 USART2 Circular DMA 接收）保持正常且无回归。
+- 环境：STM32F407VGT6，FreeRTOS + CMSIS-RTOS2，CMake + Ninja + GNU Arm GCC；分支 `feature/m7-baseline`，代码提交 `88c3712`（清理前标签 `m7-pre-cleanup-20261121`）。
+- 构建验证：`cmake --build build/Debug --clean-first` 完成 `45/45`，0 warning / 0 error，生成 ELF/HEX/BIN：
+  - RAM：`23000 B / 128 KB`（`17.55%`）
+  - CCMRAM：`0 B / 64 KB`（`0.00%`）
+  - FLASH：`42448 B / 1 MB`（`4.05%`，`text=42344 B`、`data=96 B`、`bss=22904 B`）
+- 方法：烧录正式 Debug 固件后执行连续 3 次 NRST 复位观察：
+  1. 首次启动（第一次复位前）：向 USART2 分 4 次发送共 16 B 数据（4 × 4 B），并旋转 PA1 电位器改变输入电压；
+  2. 第一次复位后（第二次复位前）：向 USART2 分 2 次发送共 8 B 数据（2 × 4 B），保持电位器位置观察电压；
+  3. 第二次复位后（第三次运行窗口）：不做外部输入，观察默认空载启动与 5 秒周期摘要。
+- 实际结果（串口日志摘录）：
+
+```text
+[I][SYS] StackFree Heart=384 UART=640 Acq=816 B
+[I][SYS] Heap=12368 B MinHeap=12368 B
+[I][ADC] V=1 mV Late=0 Err=0
+[I][RX] Obs=0 Con=0 Drop=0 State=0 Err=0
+[I][RX] recv=4 B
+[I][SYS] StackFree Heart=384 UART=328 Acq=816 B
+[I][SYS] Heap=12368 B MinHeap=12368 B
+[I][ADC] V=2060 mV Late=0 Err=0
+[I][RX] Obs=16 Con=16 Drop=0 State=0 Err=0
+```
+
+| 观测项 | 实测结果 |
+| --- | --- |
+| 周期摘要输出 | 每 5 秒 4 行（`[SYS]`×2、`[ADC]`、`[RX]`），清晰无截断 |
+| `HeartFree` / `UARTFree` / `AcqFree` | `384 B` / `328 B`（首条格式化前为 `640 B`，首次 `vsnprintf` 后稳定为 `328 B`） / `816 B` |
+| `Heap` / `MinHeap` | `12368 B` / `12368 B`（三次运行全程稳定） |
+| M5 ADC 电压变化与超时/错误 | `0～3 mV -> 1201/1197 mV -> 2059/2060 mV`，复位后持续读出 `2057～2059 mV`；全程 `Late=0 Err=0` |
+| M6 USART2 接收与统计 | 轮 1：`4×4 B -> Obs=16 Con=16`；轮 2：`2×4 B -> Obs=8 Con=8`；轮 3：`Obs=0 Con=0`；全程 `Drop=0 State=0 Err=0` |
+| NRST ×3 恢复 | 3 次复位后计数清零、三任务与外设均正常恢复 |
+
+- 结论：**PASS（M7-P0 清理基线构建、日志收敛、ADC 采样、短包 UART DMA 接收与 NRST ×3 回归）**。
+- 边界：本轮回归仅测试了 4 B 短包（累计 16 B / 8 B）与 NRST ×3，未重跑 257 B 跨界长流、软件环溢出恢复、硬件错误注入或完全断电重新上电 ×3；上述专项能力沿用 M6-P3/P4 历史验收结论，不在本条重复宣称。

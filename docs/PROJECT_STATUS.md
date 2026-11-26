@@ -3,22 +3,25 @@
 > 唯一回答：项目现在在哪？
 > 更新时机：项目状态发生明显变化时。
 
-更新时间：2026-11-21
+更新时间：2026-11-26
 
 ## Current Milestone
 
-M6：USART2 DMA + IDLE 不定长通信（仍在收尾）。P1/P2 基线已归档；P3 Circular DMA、字节环、长流及软件溢出恢复已通过；P4 已验证部分 UART 故障恢复控制路径、FE 恢复和 771 B 数据回归。DMA 真实故障专项按当前计划暂缓，真实 NE 硬件故障未验证；正式配置 Clean Build、烧录和最终回归/提交尚待取得证据。已确认的 M6-P3 Git 基线仍为 `3136142`（2026-11-12 已推送），不能视作最新 P4 提交。
+M7：RS485 半双工通信（启动准备阶段）。M6 已通过 PR #7（`08d5b64`，含代码 `8bc0a8e` 与文档 `e1461b6`）合入 `main`；已在 `feature/m7-baseline` 上完成 **M7-P0 运行时清理与可复用 `byte_ring_buffer` 模块化**（`88c3712`），并通过 Clean Build 及板级 ADC/短包 RX/NRST ×3 回归。真实 NE 硬件注入、真实 DMA 故障专项与 UART TX DMA 保留为 M6 未覆盖声明。
 
 ## Current Goal
 
-在已验证 M6-P3 与已测 M6-P4 错误恢复路径的基础上，核对正式构建配置并完成最终可复现回归，再整理 Git 收尾。当前数据接收链路（沿用 P3 架构；P4 新源码细节未随本次压缩包提供）为:
+在干净、低噪声、已模块化的 M7-P0 运行基线之上，先完成 RS485 硬件资源核对（收发器型号、UART 外设、DE/RE 控制引脚、3.3 V 电平与共地接线），再建立最小半双工收发与方向切换时序基线。当前 USART2 接收与 M5 采集链路已保持常驻运行：
 
 ```text
 USART2 RX / PD6 / 115200 8N1
   -> DMA1 Stream5 Channel4 / Circular / 256 B
   -> HT / TC / IDLE 回调按 DMA 位置差分搬运
-  -> 独立 uint8_t Ring Buffer / 有效 1023 B
-  -> UARTTask 分块消费、校验与统计
+  -> ByteRingBuffer_t (Inc/byte_ring_buffer.h, 1024 B 静态数组 / 有效 1023 B)
+  -> UARTTask 消费、非阻塞异常恢复与 5 s 摘要日志
+
+PA1 / ADC1_IN1 -> TIM2 TRGO (50 Hz) -> DMA2 Stream0 Circular (20x uint16_t)
+  -> Half / Full Thread Flags -> AcquisitionTask (10 点均值电压)
 ```
 
 ## Completed
@@ -302,40 +305,45 @@ USART2 RX / PD6 / 115200 8N1
 - T10-A NE **软件模拟**分类与恢复启动已测：`LastErr=0x00000002 NE=1 Retry=1 StartOK=1 State=0`；16 B 模拟数据的校验偏移未核对，不宣称逐字节匹配。真实 NE 硬件注入未执行。
 - FE 连续错误恢复按用户已确认的流程完成；历史 FE 阶段曾显示 `Err=3 LastErr=0x00000004 Retry=3 StartOK=3 Exhausted=0 Gap=3`，恢复后数据回归见 `TEST-20261121-04`，故障与数据日志为分阶段证据。
 - 独立 771 B PRBS32 正常数据回归已通过：`Observed=Writed=Consumed=Checked=771`，`Drop=Pending=StatsErrors=Mismatch=0`；连续快照稳定，HeartFree=384 B、UARTFree=376 B、Heap/MinHeap=12368 B。
+- 2026-11-21 M6 PR #7 已合入 `main`：`08d5b64`（含代码提交 `8bc0a8e` 与文档提交 `e1461b6`）；经源码核实，`8bc0a8e` 的全部临时测试/注入宏均为 `0U`，且 `M6DIAG` 的 `UReady/DReady/DMAR/DMA_EN=0` 属于仅在 `M6_UART_RecoverRx()` 触发时赋值的初始值，并非 DMA 停机。
+- 2026-11-26 在 `feature/m7-baseline` 上完成 M7-P0 运行时清理与模块化（保护标签 `m7-pre-cleanup-20261121`，代码提交 `88c3712`）：
+  - 删除未使用的历史 M4 死文件 `Inc/m4_ipc.h`、`Src/m4_ipc.c`、`Inc/m4_isr.h`、`Src/m4_isr.c`，移除 `Src/main.c` 中 TIM7 空回调；将 `Src/ring_buffer.c` 移入 `if(M4_ENABLE_SPSC_TEST)` 条件块。
+  - 抽离可复用依赖注入式字节环模块 `Inc/byte_ring_buffer.h` / `Src/byte_ring_buffer.c`（C11 `_Atomic` acquire/release，无动态分配，调用方传入静态数组与容量），供 USART2 与后续 M7 RS485 共用。
+  - 删除 `Src/freertos.c` 中的 M6-P2 死变量、M6-P3/P4 临时测试/注入代码、硬编码 PRBS32 校验器和 P4 内部寄存器诊断变量；保留 M5 ADC 采集与 M6 Circular DMA + 字节环 + 非阻塞错误分类/恢复状态机。
+  - 串口日志收敛为每 5 秒 4 行摘要（`[SYS]` 三任务 StackFree、`[SYS]` Heap/MinHeap、`[ADC]` V/Late/Err、`[RX]` Obs/Con/Drop/State/Err）、数据到达时单轮汇总 `[RX] recv=... B`，以及错误/状态切换触发的 `[M6ERR]`。
+  - Debug Clean Build（45/45，0 warning / 0 error）通过：RAM `23000 B (17.55%)`、CCMRAM `0 B`、FLASH `42448 B (4.05%)`。
+  - 板级回归通过（`TEST-20261126-01`）：`HeartFree=384 B`、`UARTFree=328 B`（首次格式化后稳定）、`AcqFree=816 B`、`Heap=MinHeap=12368 B`；PA1 电位器 `0～2060 mV` 且 `Late=0 Err=0`；USART2 短包 `16 B` / `8 B` 接收正常且 `Drop=0 Err=0`；NRST ×3 全部恢复。
 
 ## In Progress
 
-- 按最新源码和正式固件配置检查所有临时故障注入开关，并完成最终 Clean Build、烧录、独立 771 B 正常/需要的 FE 回归。
-- 对照恢复实现核实 `[M6DIAG] UReady/DReady/DMAR/DMA_EN` 的采样口径，补齐恢复后硬件状态的直接证据。
-- 汇总 M6-P4 的最新 Git Diff、提交与远程状态；本次文件包仅含 `docs/`，没有 P4 源码与新提交证据。
+- 同步 `README.md` 与 `docs/` 至 M6 合并及 M7-P0 清理完成状态，提交文档同步 commit。
+- 准备 M7 RS485 硬件与外设资源确认（收发器型号、选定 UART、DE/RE GPIO、供电与共地条件）。
 
 ## Blocked
 
-- 没有已确认的外部硬件阻塞。真实 NE 故障暂不要求；DMA 专项（真实错误/异步 Abort 竞态）按用户当前安排暂缓，不应记为已验收。
-- 正式固件验收和 P4 Git 收尾缺少本轮可核验的命令/源代码材料，属于待执行/待提供证据，而不是已确认缺陷。
+- 没有已确认的软件或工具链阻塞。
+- M7 RS485 编码前需先确认实际 RS485 硬件收发器模块、目标 UART 引脚与 DE/RE 控制引脚（遵循不预设未确认硬件约束）。
+- M6 真实 NE 硬件注入、真实 DMA 硬件错误/异步 Abort 竞态、最坏响应时延与 UART TX DMA 继续保留为未覆盖声明。
 
 ## Known Bugs
 
-- M6-P2 误计 RxEvent 为 UART 错误已修复；Normal DMA 重启空窗和 8 格队列背压作为历史对照保留。
-- M6-P3 CubeMX 换行及末尾空行差异已清理，软件环满时按策略发生的 1025 B 丢弃不是新 Bug。
-- 最新 771 B 正常回归中 `State=0` 与 `UReady=DReady=DMAR=DMA_EN=0` 并存；未拿到诊断采样代码，暂不判为故障或已修复问题，见 `KG-015`。
-- 本轮无新确认根因，`ERROR_LOG.md` 不新增条目。
+- 当前无未解决的已知代码缺陷。
+- 此前 `TEST-20261121-05` 中 `UReady=DReady=DMAR=DMA_EN=0` 的疑问已通过源码审查确认：该 4 项诊断变量仅在 `M6_UART_RecoverRx()` 执行恢复前赋值，常态 `Err=0` 时保持初始值 `0`，不是 DMA 异常（M7-P0 已移除这组仅用于 P4 调试的变量）。
 
 ## Current Branch
 
-- 上次明确核对：`feature/m6-baseline`；P2 代码 `7d6b3dd`、文档 `bd6d2cf`、P3 代码 `3136142`。
-- 2026-11-12 已核验本地/远程 P3 提交一致；**2026-11-21 尚未取得 P4 当前分支/HEAD/Push 的新证据**，不得据旧基线声称 P4 已提交。
+- 当前分支：`feature/m7-baseline`（从 `main` `08d5b64` 切出）。
+- 本地最新代码提交：`88c3712`（`refactor: modularize byte ring buffer and simplify runtime logging`）。
+- 清理前安全标签：`m7-pre-cleanup-20261121`（指向 `08d5b64`）。
+- `main` / `origin/main`：`08d5b64`（PR #7 Merge）；`feature/m7-baseline` 待文档提交完成后统一推送远端。
 
 ## Last Verified Function
 
-- M6-P3：257 B 跨界、10/50 KiB 内容校验、单字节错误检出、2048 B 软件环溢出保留 1023 B 与恢复 257 B（`TEST-20261112-01`～`03`）。
-- M6-P4 控制路径：T08-A/B 重试成功/耗尽、T09 ORE 分类及恢复启动、T10-A NE 软件模拟分类及恢复启动均已测（`TEST-20261121-01`～`03`）。
-- FE：用户确认故障恢复及恢复后数据回归完成，保留 FE 故障阶段与随后 771 B 数据阶段的证据区分（`TEST-20261121-04`）。
-- 771 B PRBS32：本次正常日志 `Observed=Writed=Consumed=Checked=771`、`Drop=Pending=StatsErrors=Mismatch=0`，重复快照一致；资源 `HeartFree=384 B UARTFree=376 B Heap=MinHeap=12368 B`（`TEST-20261121-05`）。
-- T11-A DMA 仅有既往**软件回调模拟**观察，本轮 DMA 专项暂缓，不纳入正式完成项（`TEST-20261121-06`）。
+- M7-P0 清理与字节环模块化回归（`88c3712`，`TEST-20261126-01`）：Clean Build 45/45 PASS（RAM `23000 B` / FLASH `42448 B`）；每 5 秒 4 行日志摘要稳定；`Heart=384 B`、`UART=328 B`、`Acq=816 B`、`Heap=MinHeap=12368 B`；ADC 电位器 `0～2060 mV` (`Late=0 Err=0`)；USART2 短包 `16 B` / `8 B` 经 `ByteRingBuffer` 消费且 `Obs==Con`、`Drop=0 Err=0`；NRST ×3 全部恢复。
+- M6-P3/P4 历史验收仍有效：257 B 跨界、10/50 KiB 内容校验、2048 B 软件环溢出恢复（`TEST-20261112-01`～`03`），以及 T08-A/B、T09 ORE、T10-A NE 软件模拟、FE 恢复与 771 B PRBS32 回归（`TEST-20261121-01`～`05`）。
 
 ## Next Step
 
-1. 对照实际 P4 源码核对故障注入宏、接收状态与诊断字段的采样时点，恢复正式配置。
-2. 正式 Clean Build → 烧录 → PRBS32 771 B 终态回归，留存构建与串口原始结果。
-3. 审核 `git status/diff`、提交并推送实际改动，随后判断 M6 是否达到当前协定的阶段关闭条件；DMA 真实故障和最坏时延留作明确未覆盖事项。
+1. 推送 M7-P0 代码与文档同步提交至 `origin/feature/m7-baseline`。
+2. 正式开始 M7-P1：核对 RS485 收发器硬件、串口外设（避开 USART2 调试日志口）、DE/RE 引脚和 3.3 V 电平接线，不提前假设引脚。
+3. 规划并实现最小 RS485 半双工发送/接收切换实验（复用 `byte_ring_buffer`），验证方向切换时序与双向通信。

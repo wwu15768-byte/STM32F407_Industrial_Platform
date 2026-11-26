@@ -27,8 +27,8 @@
 | M3 | 建立线程安全、可裁剪的调试基础设施 | 完成 |
 | M4 | 掌握并实现 RTOS 通信、同步和数据缓冲基础 | 完成 |
 | M5 | 建立 ADC + Timer + DMA 实时数据采集子系统 | 完成（基础功能已验收，PR #6 合并 `30b0072`） |
-| M6 | 实现并验证 UART DMA + IDLE 不定长通信 | 当前（P1～P3 已测；P4 部分错误恢复及 771 B 回归通过，DMA 专项暂缓，正式收尾未完成） |
-| M7 | 实现并验证 RS485 半双工通信 | 待开始 |
+| M6 | 实现并验证 UART DMA + IDLE 不定长通信 | 完成（RX Circular DMA + 字节环 + 已测恢复已合入 `main` PR #7 `08d5b64`；真实 NE、DMA 故障专项与 TX DMA 保留未覆盖声明） |
+| M7 | 实现并验证 RS485 半双工通信 | 当前（已完成 M7-P0 运行时清理与 `byte_ring_buffer` 模块化 `88c3712`，准备进入 RS485 硬件与驱动基线） |
 | M8 | 实现基础 Modbus RTU 通信 | 待开始 |
 | M9 | 建立独立于具体总线的统一数据模型 | 待开始 |
 | M10 | 建立 bxCAN 基础通信与实时收发模型 | 待开始 |
@@ -267,18 +267,18 @@ Timer
 - ADC + Timer + DMA 采集模块与任务链路。
 - 参数说明、数据流图和板级测试记录。
 
-## M6：UART DMA + IDLE 不定长通信（当前）
+## M6：UART DMA + IDLE 不定长通信（基础里程碑已完成）
 
 > 2026-11-12 进展：M6-P3 Circular DMA 和独立字节环已完成板级验收，代码 `3136142` 已推送 `feature/m6-baseline`。USART2 RX 通过 257 B 跨界、10/50 KiB 逐字节校验、单字节错误检出和软件环溢出恢复。
-> 2026-11-21 进展：M6-P4 T08-A/B 恢复重试分支、T09 ORE 恢复启动、T10-A NE **软件模拟**恢复启动已测；FE 恢复及恢复后数据测试由用户确认完成。771 B PRBS32 正常回归 `Observed=Writed=Consumed=Checked=771` 且 `Drop=Mismatch=0`。真实 NE 硬件注入未测，DMA 专项暂缓；P4 正式固件构建/归档及 UART TX DMA 尚未验收。
+> 2026-11-21 进展：M6-P4 T08-A/B 恢复重试分支、T09 ORE 恢复启动、T10-A NE **软件模拟**恢复启动已测；FE 恢复及恢复后数据测试由用户确认完成。771 B PRBS32 正常回归 `Observed=Writed=Consumed=Checked=771` 且 `Drop=Mismatch=0`。
+> 2026-11-26 收尾校准：代码提交 `8bc0a8e` 与文档提交 `e1461b6` 已通过 PR #7（`08d5b64`）合入 `main`；经源码核实，`8bc0a8e` 中 `M6_OVERFLOW_TEST`、`M6_RX_TEST_BUSY_RETURNS`、`M6_TEST_FAULT_MODE` 均为 `0U`，且 `M6DIAG` 四项硬件状态仅在 `M6_UART_RecoverRx()` 触发时赋值。真实 NE 硬件注入、真实 DMA 硬件故障/异步 Abort 专项、最坏响应时延与 UART TX DMA 保留为明确未覆盖范围。
 
 **阶段推进**
 
 - M6-P1：配置与生成文件基线已完成。
 - M6-P2：Normal DMA + IDLE/TC + CMSIS 队列的短包、边界和背压对照已完成，代码 `7d6b3dd`、文档 `bd6d2cf`。
 - M6-P3：Circular DMA 256 B + 独立字节 Ring Buffer（有效 1023 B）已完成。长流、软件环满丢弃计数、保留旧字节与恢复接收见 `TEST-20261112-01`～`TEST-20261112-03`。
-- M6-P4：部分验收已完成——T08-A/B 重试成功/耗尽、T09 ORE 错误分类与恢复启动、T10-A NE 软件模拟分类与恢复启动，以及用户确认的 FE 恢复及后续 771 B 数据回归。尚未覆盖真实 NE 硬件注入、真实 DMA 故障/异步 Abort 竞态与最坏响应时延；DMA 专项本轮暂缓。
-- M6 收尾：恢复正式编译配置，Clean Build、烧录和最终 771 B 回归后审核 Git Diff/提交/推送；目前不能宣告 M6 完成。UART TX DMA 与协议任务按后续实际范围排期，不把 RX 结果扩写为 TX 验收。
+- M6-P4：已测部分完成并合入 `main`（`8bc0a8e` / PR #7 `08d5b64`）——T08-A/B 重试成功/耗尽、T09 ORE 错误分类与恢复启动、T10-A NE 软件模拟分类与恢复启动，以及用户确认的 FE 恢复及后续 771 B 数据回归。真实 NE 硬件注入、真实 DMA 故障/异步 Abort 竞态、最坏响应时延与 UART TX DMA 保留为未覆盖声明。
 
 **Goal**
 
@@ -313,7 +313,9 @@ UART
 - UART DMA + IDLE RX/TX 模块。
 - 接收状态机、缓冲策略和测试记录。
 
-## M7：RS485 半双工通信
+## M7：RS485 半双工通信（当前）
+
+> 2026-11-26 进展：已从 M6 合并点 `08d5b64` 切出 `feature/m7-baseline`，完成 **M7-P0 运行时清理与字节环模块化**（`88c3712`）：抽离可复用依赖注入模块 `Inc/byte_ring_buffer.h` / `Src/byte_ring_buffer.c`（供 USART2 与后续 RS485 共用），移除 M6 临时测试/注入代码及 M4 死文件 `m4_ipc.*`/`m4_isr.*`，并将串口输出收敛为每 5 秒 4 行摘要 + 接收提示 + 异常触发日志。Clean Build 与板级 ADC/短包 RX/NRST ×3 回归通过（`TEST-20261126-01`）。下一步确认 RS485 收发器硬件、串口外设与 DE/RE 引脚方案。
 
 **Goal**
 
